@@ -1,0 +1,33 @@
+print("¡FootDetectors se está ejecutando!")
+
+local character = script.Parent
+
+local function createFootDetector(footName, detectorName)
+	local foot = character:FindFirstChild(footName)
+	if foot and not character:FindFirstChild(detectorName) then
+		local detector = Instance.new("Part")
+		detector.Name = detectorName
+		detector.Size = Vector3.new(0.9, 0.4, 1) -- Ajusta tamaño si quieres
+		detector.Transparency = 1 -- 0.5 para debug, 1 para invisible final
+		detector.CanCollide = false
+		detector.Anchored = false
+		detector.Massless = true
+		detector.BrickColor = BrickColor.new("Lime green") -- Debug
+		detector.Parent = character
+
+		-- Ubicarlo justo debajo del pie (relativo al pie)
+		detector.CFrame = foot.CFrame * CFrame.new(0, -foot.Size.Y/2 - detector.Size.Y/2, 0)
+
+		local weld = Instance.new("WeldConstraint")
+		weld.Part0 = detector
+		weld.Part1 = foot
+		weld.Parent = detector
+
+		print("Detector creado:", detectorName, "bajo", footName)
+	end
+end
+
+-- Espera brevemente para asegurarse que las partes existen
+task.wait(0.1)
+createFootDetector("LeftFoot", "FootDetectorLeft")
+createFootDetector("RightFoot", "FootDetectorRight")
