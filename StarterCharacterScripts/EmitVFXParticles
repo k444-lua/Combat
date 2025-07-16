@@ -1,0 +1,18 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local VFXEmit = ReplicatedStorage:WaitForChild("VFXEmit")
+
+VFXEmit.OnClientEvent:Connect(function(vfx)
+	local meshPart = vfx:FindFirstChildWhichIsA("BasePart", true)
+	if meshPart then
+		local attachment = meshPart:FindFirstChild("HitEffect")
+		if attachment then
+			for _, emitter in ipairs(attachment:GetChildren()) do
+				if emitter:IsA("ParticleEmitter") then
+					emitter.Enabled = false
+					emitter:Clear()
+					emitter:Emit(4)
+				end
+			end
+		end
+	end
+end)
