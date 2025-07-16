@@ -1,0 +1,38 @@
+local rs = game:GetService("ReplicatedStorage")
+local remote = rs.AOERemote
+local SafeDamage = require(game.ServerScriptService.SafeDamage)
+
+remote.OnServerEvent:Connect(function(player, data)
+	if data.action == "SpecialFinisher" and data.victimName and typeof(data.victimName) == "string" then
+		local victimChar = workspace:FindFirstChild(data.victimName)
+		if victimChar then
+			local humanoid = victimChar:FindFirstChildWhichIsA("Humanoid")
+			local ragdoll = victimChar:FindFirstChild("Ragdoll")
+			if humanoid and ragdoll and ragdoll.Value then
+				if humanoid.Health > 0 then
+					-- Golpe especial: solo daño y recarga
+					SafeDamage:Deal(humanoid, 4)
+					local stats = player.Character and player.Character:FindFirstChild("Stats")
+					if stats then
+						local res = stats:FindFirstChild("Resistencia")
+						local sta = stats:FindFirstChild("Stamina")
+						if res then res.Value = math.min(res.Value + 10, 100) end
+						if sta then sta.Value = math.min(sta.Value + 10, 100) end
+					end
+				elseif humanoid.Health <= 0 then
+					-- Finalizador: muerte, no recarga
+					humanoid.Health = 0
+				end
+
+				local cf = victimChar:FindFirstChild("HumanoidRootPart") and victimChar.HumanoidRootPart.CFrame or victimChar:GetPivot()
+				for _, plr in ipairs(game.Players:GetPlayers()) do
+					remote:FireClient(plr, {
+						action = "FinisherEffect",
+						cframe = cf,
+						mod = 1
+					})
+				end
+			end
+		end
+	end
+end)
