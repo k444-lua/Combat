@@ -1,0 +1,5 @@
+local M = require(game.ServerScriptService.RagdollModule)
+local c = script.Parent
+
+M.Joints(c)
+-- NO pongas ragdoll aquí ni al morir
