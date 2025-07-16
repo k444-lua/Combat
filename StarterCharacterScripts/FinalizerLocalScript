@@ -1,0 +1,192 @@
+-- FinalizerLocalScript.lua
+-- Cooldown exacto igual a la duración de la animación + 0.1 segundos extra
+
+local player = game.Players.LocalPlayer
+local character = script.Parent
+local humanoid = character:WaitForChild("Humanoid")
+local uis = game:GetService("UserInputService")
+local rs = game:GetService("ReplicatedStorage")
+local debris = game:GetService("Debris")
+local ts = game:GetService("TweenService")
+local AOERemote = rs:WaitForChild("AOERemote")
+local FINISHER_KEY = Enum.KeyCode.E
+local FINISHER_ANIMATION = rs.FX.Animation
+
+local inputBlocked = false
+local isFinisherPlaying = false
+local debounceUntil = 0
+
+print("[DEBUG] FinalizerLocalScript iniciado:", script, "Time:", tick())
+
+local params = RaycastParams.new()
+params.FilterType = Enum.RaycastFilterType.Whitelist
+params.FilterDescendantsInstances = {workspace.Map}
+
+local function effect(CF, Mod)
+	print("[DEBUG] Ejecutando efectos visuales del finalizador")
+	local sphere = rs.FX.Sphere:Clone()
+	sphere.CFrame = CF
+	sphere.Size = Vector3.new(0,0,0)
+	sphere.Parent = workspace.Fx
+	ts:Create(sphere, TweenInfo.new(.4), {Size = Vector3.new(40,40,40) * Mod, Transparency = 1}):Play()
+	for _, particle in pairs(sphere.Attachment:GetChildren()) do
+		particle.Speed = NumberRange.new(particle.Speed.Min * Mod, particle.Speed.Max * Mod)
+		particle:Emit(particle:GetAttribute("EmitCount") * Mod)
+	end
+	debris:AddItem(sphere, 1.5)
+	for i = 1, (20 * Mod)/10 do
+		local segments = math.random(8,12)
+		for i2 = 0, segments - 1 do
+			local potCf = CF * CFrame.Angles(0,math.rad(360/segments) * i2, 0) * CFrame.new(0,0,(i * -(20 * Mod)/3) - 5)
+			local result = workspace:Raycast(potCf.Position + Vector3.new(0,3,0), Vector3.new(0,-10,0), params)
+			if result then
+				local hb = Instance.new("Part", workspace.Fx)
+				hb.Anchored = true
+				hb.CanCollide = false
+				hb.Transparency = result.Instance.Transparency
+				hb.Color = result.Instance.Color
+				hb.Material = result.Material
+				hb.Name = "hb"
+				hb.CanQuery = false
+				hb.Size = Vector3.new(math.random(8,14) * 10 * Mod/segments,math.random(5,6),math.random(5.10))
+				hb.CFrame = potCf
+				hb.Position = result.Position - Vector3.new(0,5,0)
+				hb.CFrame *= CFrame.Angles(math.rad(math.random(10,45)),0,0)
+				ts:Create(
+					hb,
+					TweenInfo.new(.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+					{Position = hb.Position + Vector3.new(0,3,0)}
+				):Play()
+				task.delay(.3,function()
+					ts:Create(
+						hb,
+						TweenInfo.new(.6, Enum.EasingStyle.Back, Enum.EasingDirection.In),
+						{Position = hb.Position - Vector3.new(0,6 * Mod,0)}
+					):Play()
+				end)
+				game.Debris:AddItem(hb, 2)
+			end
+		end
+		task.wait()
+	end
+end
+
+local function isFootInsideHitbox(foot, hitbox)
+	if not foot or not hitbox then return false end
+	local rel = hitbox.CFrame:PointToObjectSpace(foot.Position)
+	local sx, sy, sz = hitbox.Size.X/2, hitbox.Size.Y/2, hitbox.Size.Z/2
+	return (rel.X > -sx and rel.X < sx) and (rel.Y > -sy and rel.Y < sy) and (rel.Z > -sz and rel.Z < sz)
+end
+
+local function areFeetInRagdollHitbox(myCharacter, victimCharacter)
+	local leftFoot = myCharacter:FindFirstChild("FootDetectorLeft")
+	local rightFoot = myCharacter:FindFirstChild("FootDetectorRight")
+	local hitbox = victimCharacter:FindFirstChild("RagdollHitbox")
+	if not (leftFoot and rightFoot and hitbox) then return false end
+	return isFootInsideHitbox(leftFoot, hitbox) and isFootInsideHitbox(rightFoot, hitbox)
+end
+
+local function playFinisherAnimation(onEnd)
+	print("[DEBUG] Reproduciendo animación de finalizador")
+	for _, track in ipairs(humanoid:GetPlayingAnimationTracks()) do
+		track:Stop(0.1)
+	end
+	local animate = character:FindFirstChild("Animate")
+	if animate then
+		animate.Disabled = true
+	end
+	isFinisherPlaying = true
+
+	local animTrack = humanoid:LoadAnimation(FINISHER_ANIMATION)
+	animTrack.Priority = Enum.AnimationPriority.Action
+	animTrack:Play()
+	local animLength = animTrack.Length or 0
+
+	animTrack.Stopped:Connect(function()
+		isFinisherPlaying = false
+		debounceUntil = tick() + animLength + 0.1 -- cooldown = duración de la animación + 0.1s
+		if animate then animate.Disabled = false end
+		print("[DEBUG] Animación de finalizador terminada. Cooldown hasta:", debounceUntil)
+		if onEnd then onEnd() end
+	end)
+end
+
+uis.InputBegan:Connect(function(input, gpe)
+	print("[DEBUG] InputBegan disparado en", script, "input:", input.KeyCode, "tick:", tick())
+	if inputBlocked then print("[DEBUG] Input bloqueado, ignorando."); return true end
+	if gpe or input.KeyCode ~= FINISHER_KEY then return end
+
+	local now = tick()
+	if isFinisherPlaying or now < debounceUntil then
+		print("[DEBUG] Ataque bloqueado por animación en curso o debounce, ignora tecla.")
+		return
+	end
+
+	local myCharacter = player.Character
+	if not myCharacter then print("[DEBUG] No hay Character."); return end
+
+	local ejecutado = false
+	local targetName = nil
+	for _, plr in ipairs(game.Players:GetPlayers()) do
+		if plr ~= player and plr.Character and plr.Character:FindFirstChild("RagdollHitbox") then
+			if areFeetInRagdollHitbox(myCharacter, plr.Character) then
+				isFinisherPlaying = true
+				ejecutado = true
+				targetName = plr.Character.Name
+				print("[DEBUG] Enviando finisher remoto a:", targetName)
+				AOERemote:FireServer({
+					action = "SpecialFinisher",
+					victimName = targetName
+				})
+				playFinisherAnimation()
+				break
+			end
+		end
+	end
+	if ejecutado and targetName then
+		print("[CLIENTE] Finisher sobre:", targetName)
+	end
+	if not ejecutado then
+		isFinisherPlaying = false
+		debounceUntil = tick() + 0.05
+		print("[DEBUG] No se encontró un ragdoll válido para finalizar.")
+	end
+end)
+
+AOERemote.OnClientEvent:Connect(function(data)
+	if data.action == "FinisherEffect" then
+		print("[DEBUG] Recibido evento visual de finisher")
+		effect(data.cframe, data.mod or 1)
+	end
+end)
+
+uis.InputBegan:Connect(function(input, gpe)
+	if not inputBlocked then return end
+	if input.UserInputType == Enum.UserInputType.Keyboard then
+		print("[DEBUG] Input bloqueado por inputBlocked (teclado).")
+		return true
+	end
+	if input.UserInputType == Enum.UserInputType.Gamepad then
+		print("[DEBUG] Input bloqueado por inputBlocked (gamepad).")
+		return true
+	end
+end)
+
+local function monitorFinalizableState()
+	while true do
+		task.wait(0.1)
+		if humanoid:GetAttribute("CanBeFinished") then
+			if not inputBlocked then
+				inputBlocked = true
+				print("[DEBUG] Entró en finalizable, input bloqueado")
+			end
+		else
+			if inputBlocked then
+				inputBlocked = false
+				print("[DEBUG] Salió de finalizable, input liberado")
+			end
+		end
+	end
+end
+
+task.spawn(monitorFinalizableState)
