@@ -1,0 +1,19 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local event = ReplicatedStorage:WaitForChild("ModificarStat")
+
+event.OnServerEvent:Connect(function(player, statName, accion, cantidad)
+	local char = player.Character
+	if not char then return end
+	local stats = char:FindFirstChild("Stats")
+	if not stats then return end
+	local stat = stats:FindFirstChild(statName)
+	if not stat or not stat:IsA("IntValue") then return end
+
+	if accion == "Increase" then
+		stat.Value = stat.Value + (cantidad or 10)
+	elseif accion == "Decrease" then
+		stat.Value = math.max(0, stat.Value - (cantidad or 10))
+	elseif accion == "Set" and type(cantidad) == "number" then
+		stat.Value = cantidad
+	end
+end)
