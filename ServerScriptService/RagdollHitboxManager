@@ -1,0 +1,57 @@
+-- RagdollHitboxManager.lua (Módulo para crear y quitar la RagdollHitbox especial)
+local module = {}
+
+-- Tabla para almacenar conexiones activas por hitbox
+local connections = {}
+
+function module.Create(character, duration)
+	if not character or character:FindFirstChild("RagdollHitbox") then return end
+	local torso = character:FindFirstChild("UpperTorso") or character:FindFirstChild("Torso")
+	if not torso then return end
+
+	local hitbox = Instance.new("Part")
+	hitbox.Name = "RagdollHitbox"
+	hitbox.Size = Vector3.new(3, 2, 5)
+	hitbox.Anchored = true
+	hitbox.CanCollide = false
+	hitbox.CanQuery = true
+	hitbox.Transparency = 0.5 -- Pon a 1 para ocultar en producción
+	hitbox.BrickColor = BrickColor.new("Bright yellow")
+	hitbox.Parent = character
+
+	-- Que siga posición y rotación del torso
+	local heartbeatConn
+	heartbeatConn = game:GetService("RunService").Heartbeat:Connect(function()
+		if not hitbox.Parent or not torso.Parent then
+			if connections[hitbox] then
+				connections[hitbox]:Disconnect()
+				connections[hitbox] = nil
+			end
+			return
+		end
+		hitbox.CFrame = torso.CFrame
+	end)
+	connections[hitbox] = heartbeatConn
+
+	-- Autoquitar tras duración si se especifica
+	if duration and duration > 0 then
+		game:GetService("Debris"):AddItem(hitbox, duration)
+		task.delay(duration, function()
+			module.Remove(character)
+		end)
+	end
+end
+
+function module.Remove(character)
+	local hitbox = character and character:FindFirstChild("RagdollHitbox")
+	if hitbox then
+		local conn = connections[hitbox]
+		if conn then
+			conn:Disconnect()
+			connections[hitbox] = nil
+		end
+		hitbox:Destroy()
+	end
+end
+
+return module
