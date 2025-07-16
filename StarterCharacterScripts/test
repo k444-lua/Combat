@@ -1,0 +1,3 @@
+local AOERemote = game:GetService("ReplicatedStorage"):WaitForChild("AOERemote")
+print("[CLIENTE TEST] Enviando test remoto")
+AOERemote:FireServer({action = "DebugTest"})
