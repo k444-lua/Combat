@@ -1,0 +1,82 @@
+-- GrabAttachModule.lua
+-- Simula un agarre entre dos personajes sin usar Motor6D entre personajes activos.
+-- Congela a la víctima y mueve su HumanoidRootPart cada frame para que siga la mano del atacante, sin bugs de física ni ownership.
+
+local RunService = game:GetService("RunService")
+
+local GrabAttach = {}
+
+--[[
+    Uso:
+    local cleanup = GrabAttach.Start(attackerChar, victimChar, {
+        HeadOffset = Vector3.new(0, 0, -1), -- distancia de la cabeza respecto a la mano
+        BodyOffset = Vector3.new(0, -1, -1.5), -- offset del cuerpo respecto a la mano (opcional)
+    })
+    ...
+    -- Para terminar el agarre:
+    cleanup()
+]]
+
+function GrabAttach.Start(attackerChar, victimChar, config)
+	config = config or {}
+	local grip = attackerChar:FindFirstChild("RightHand") or attackerChar:FindFirstChild("Right Arm")
+	local victimRoot = victimChar:FindFirstChild("HumanoidRootPart")
+	local victimHead = victimChar:FindFirstChild("Head")
+	if not grip or not victimHead or not victimRoot then return function() end end
+
+	-- Configuración de offsets
+	local HEAD_OFFSET = config.HeadOffset or Vector3.new(0, 0, -1)
+	local BODY_OFFSET = config.BodyOffset or Vector3.new(0, -1, -1.5)
+
+	-- Congelar víctima
+	local humanoid = victimChar:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.PlatformStand = true
+		humanoid.WalkSpeed = 0
+		humanoid.JumpPower = 0
+		humanoid.AutoRotate = false
+		if victimChar:FindFirstChild("Animate") then
+			victimChar.Animate.Disabled = true
+		end
+	end
+
+	-- Desactiva herramientas de la víctima
+	for _, tool in ipairs(victimChar:GetChildren()) do
+		if tool:IsA("Tool") then tool.Enabled = false end
+	end
+
+	-- Loop para mover la raíz de la víctima cada frame
+	local active = true
+	local function update()
+		if grip and victimRoot and victimHead and active then
+			-- Calcula la posición deseada para la cabeza respecto a la mano del atacante
+			local targetHeadCF = grip.CFrame * CFrame.new(HEAD_OFFSET)
+			-- Calcula la diferencia entre la posición actual del HumanoidRootPart y la cabeza
+			local bodyOffset = BODY_OFFSET
+			-- Nuevo CFrame para el HumanoidRootPart basado en la posición deseada de la cabeza y el offset del cuerpo
+			victimRoot.CFrame = targetHeadCF * CFrame.new(bodyOffset)
+		end
+	end
+
+	local heartbeatConn = RunService.Heartbeat:Connect(update)
+
+	-- Función de cleanup/restauración
+	return function()
+		active = false
+		if heartbeatConn then heartbeatConn:Disconnect() end
+		if humanoid then
+			humanoid.PlatformStand = false
+			humanoid.WalkSpeed = 16
+			humanoid.JumpPower = 50
+			humanoid.AutoRotate = true
+			if victimChar:FindFirstChild("Animate") then
+				victimChar.Animate.Disabled = false
+			end
+		end
+		for _, tool in ipairs(victimChar:GetChildren()) do
+			if tool:IsA("Tool") then tool.Enabled = true end
+		end
+	end
+end
+
+return GrabAttach
