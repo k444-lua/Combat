@@ -1,0 +1,300 @@
+-- CatPaws Tool LocalScript
+-- Solución definitiva para R15: borra "toolnone" de Animate cada frame mientras la Tool está equipada.
+-- Así, el personaje NUNCA levanta la mano al equipar la Tool, sin afectar el resto de animaciones.
+
+local tool = script.Parent
+local player = game:GetService("Players").LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local GolpeEvent = ReplicatedStorage:WaitForChild("GolpeEvent")
+local GolpeEspecialEvent = ReplicatedStorage:WaitForChild("GolpeEspecialEvent")
+
+-- Animaciones de ataque
+local COMBO_ANIM_IDS = {
+	"rbxassetid://97550676968609",
+	"rbxassetid://109018543497223",
+	"rbxassetid://72783709353555",
+	"rbxassetid://70650950436567",
+}
+local SPECIAL_ANIM_ID = "rbxassetid://79950752167417"
+
+local GOLPE_SOUNDS = {
+	"rbxassetid://99522423818822",
+	"rbxassetid://82310130370027",
+}
+local SPECIAL_SOUNDS = {
+	"rbxassetid://85661744378638",
+	"rbxassetid://97241088688581",
+}
+
+local comboTracks, specialTrack = {}, nil
+local originalWalkSpeed = nil
+local humanoid, animator = nil, nil
+local isSpecialPlaying = false
+local isComboPlaying = false
+local debounceUntil = 0
+local comboIndex, lastAttackTime = 1, 0
+
+-- ======================
+-- EVITAR POSTURA DE TOOL
+-- ======================
+local stored_toolnone = nil
+local toolnone_remover = nil
+
+local function startRemovingToolNone()
+	local character = player.Character
+	if not character then return end
+	local animate = character:FindFirstChild("Animate")
+	if not animate then return end
+	-- Guarda toolnone original solo la primera vez
+	if not stored_toolnone then
+		local orig = animate:FindFirstChild("toolnone")
+		if orig then
+			stored_toolnone = orig:Clone()
+		end
+	end
+	-- Elimina toolnone cada frame mientras esté equipada
+	toolnone_remover = game:GetService("RunService").RenderStepped:Connect(function()
+		-- Si la tool ya no está equipada, cortamos el bucle
+		if not tool.Parent or tool.Parent ~= character then return end
+		local animate = character:FindFirstChild("Animate")
+		if animate then
+			local tn = animate:FindFirstChild("toolnone")
+			if tn then
+				tn:Destroy()
+			end
+		end
+	end)
+end
+
+local function stopRemovingToolNone()
+	if toolnone_remover then
+		toolnone_remover:Disconnect()
+		toolnone_remover = nil
+	end
+	-- Restaurar toolnone original
+	local character = player.Character
+	if character and stored_toolnone then
+		local animate = character:FindFirstChild("Animate")
+		if animate then
+			-- Elimina cualquier toolnone que Animate haya recreado
+			local tn = animate:FindFirstChild("toolnone")
+			if tn then tn:Destroy() end
+			stored_toolnone.Name = "toolnone"
+			stored_toolnone.Parent = animate
+		end
+	end
+	stored_toolnone = nil
+end
+
+tool.Equipped:Connect(function()
+	startRemovingToolNone()
+end)
+tool.Unequipped:Connect(function()
+	stopRemovingToolNone()
+end)
+
+-- ====================
+-- VFX PARA GARRAS
+-- ====================
+local PAW_NAMES = {"LeftPaw", "RightPaw"}
+local ATTACHMENT_NAME = "Attachment"
+local function setPawVFXEnabled(enabled)
+	local character = player.Character
+	if not character then return end
+	for _, pawName in ipairs(PAW_NAMES) do
+		local paw = character:FindFirstChild(pawName)
+		if paw then
+			local handle = paw:FindFirstChild("Handle")
+			if handle then
+				local attachment = handle:FindFirstChild(ATTACHMENT_NAME)
+				if attachment then
+					for _, vfx in ipairs(attachment:GetChildren()) do
+						if vfx:IsA("ParticleEmitter") then
+							vfx.Enabled = enabled
+							if enabled then
+								local lifetime = vfx.Lifetime.Max
+								local rate = vfx.Rate
+								local toEmit = math.ceil(lifetime * rate)
+								vfx:Emit(toEmit)
+							end
+						elseif vfx:IsA("Beam") or vfx:IsA("Trail") then
+							vfx.Enabled = enabled
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+tool.Equipped:Connect(function()
+	setPawVFXEnabled(true)
+end)
+tool.Unequipped:Connect(function()
+	setPawVFXEnabled(false)
+end)
+player.CharacterAdded:Connect(function()
+	if tool.Parent == player.Backpack or tool.Parent == player.Character then
+		task.wait(0.2)
+		if tool.Parent == player.Character then
+			setPawVFXEnabled(true)
+		end
+	end
+end)
+-- ====================
+-- FIN VFX PARA GARRAS
+-- ====================
+
+local function playGolpeSounds(isSpecial)
+	local character = player.Character
+	if not character then return end
+	local sounds = isSpecial and SPECIAL_SOUNDS or GOLPE_SOUNDS
+	for _, soundId in ipairs(sounds) do
+		local sound = Instance.new("Sound")
+		sound.SoundId = soundId
+		sound.Volume = 1
+		sound.PlayOnRemove = true
+		sound.Parent = character:FindFirstChild("Head") or character
+		sound:Destroy()
+	end
+end
+
+local function reduceWalkSpeed()
+	if humanoid and originalWalkSpeed then
+		humanoid.WalkSpeed = originalWalkSpeed * 0.5
+	end
+end
+local function restoreWalkSpeed()
+	if humanoid and originalWalkSpeed then
+		humanoid.WalkSpeed = originalWalkSpeed
+	end
+end
+
+local function playComboStep()
+	if isComboPlaying then
+		return
+	end
+	isComboPlaying = true
+
+	if not comboTracks[comboIndex] then return end
+
+	reduceWalkSpeed()
+	local track = comboTracks[comboIndex]
+	track:Stop()
+	track:Play()
+	track.Stopped:Wait()
+	game:GetService("Debris"):AddItem(track, 0.1)
+	task.wait(0.05)
+	comboIndex += 1
+	if comboIndex > #comboTracks then
+		lastAttackTime = tick()
+		comboIndex = 1
+		task.wait(0.4)
+		task.delay(0.5, restoreWalkSpeed)
+	else
+		task.delay(0.5, restoreWalkSpeed)
+	end
+	isComboPlaying = false
+end
+
+local function isFootInsideHitbox(foot, hitbox)
+	if not foot or not hitbox then return false end
+	local rel = hitbox.CFrame:PointToObjectSpace(foot.Position)
+	local sx, sy, sz = hitbox.Size.X/2, hitbox.Size.Y/2, hitbox.Size.Z/2
+	return (rel.X > -sx and rel.X < sx) and (rel.Y > -sy and rel.Y < sy) and (rel.Z > -sz and rel.Z < sz)
+end
+
+local function areFeetInHitbox(victim, leftFoot, rightFoot)
+	local hitbox = victim:FindFirstChild("Hitbox") or victim:FindFirstChild("RagdollHitbox")
+	if not hitbox then return false end
+	local lInside = isFootInsideHitbox(leftFoot, hitbox)
+	local rInside = isFootInsideHitbox(rightFoot, hitbox)
+	return lInside and rInside
+end
+
+local function tryEspecial()
+	local character = player.Character
+	if not character then return false end
+	local leftFoot = character:FindFirstChild("FootDetectorLeft")
+	local rightFoot = character:FindFirstChild("FootDetectorRight")
+	local especialEjecutado = false
+	for _, targetPlayer in ipairs(game:GetService("Players"):GetPlayers()) do
+		if targetPlayer ~= player and targetPlayer.Character and not especialEjecutado then
+			local victim = targetPlayer.Character
+			local ragdoll = victim:FindFirstChild("Ragdoll")
+			local humanoid = victim:FindFirstChildWhichIsA("Humanoid")
+			local isRagdolled = ragdoll and ragdoll:IsA("BoolValue") and ragdoll.Value
+			if isRagdolled and humanoid and humanoid.Health > 0 then
+				if areFeetInHitbox(victim, leftFoot, rightFoot) then
+					GolpeEspecialEvent:FireServer(victim, leftFoot and leftFoot.Name or "FootDetectorLeft")
+					playGolpeSounds(true)
+					especialEjecutado = true
+				end
+			end
+		end
+	end
+	return especialEjecutado
+end
+
+tool.Activated:Connect(function()
+	local now = tick()
+	if isSpecialPlaying or isComboPlaying or now < debounceUntil then
+		return
+	end
+	local especialHecho = tryEspecial()
+	if especialHecho then
+		isSpecialPlaying = true
+		if specialTrack then
+			specialTrack:Play()
+			specialTrack.Stopped:Wait()
+		end
+		isSpecialPlaying = false
+		debounceUntil = tick() + 0.07
+		task.delay(0.5, restoreWalkSpeed)
+	else
+		local character = player.Character
+		if not character then return end
+		local root = character:FindFirstChild("HumanoidRootPart")
+		if not root then return end
+		GolpeEvent:FireServer(root.CFrame)
+		playComboStep()
+	end
+end)
+
+tool.Equipped:Connect(function()
+	task.defer(function()
+		local character = player.Character or player.CharacterAdded:Wait()
+		humanoid = character:FindFirstChildOfClass("Humanoid")
+		if not humanoid then return end
+		originalWalkSpeed = humanoid.WalkSpeed
+		animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
+		comboTracks = {}
+		for i, animId in ipairs(COMBO_ANIM_IDS) do
+			local anim = Instance.new("Animation")
+			anim.AnimationId = animId
+			comboTracks[i] = animator:LoadAnimation(anim)
+			comboTracks[i].Looped = false
+			comboTracks[i].Priority = Enum.AnimationPriority.Action4
+		end
+		local specialAnim = Instance.new("Animation")
+		specialAnim.AnimationId = SPECIAL_ANIM_ID
+		specialTrack = animator:LoadAnimation(specialAnim)
+		specialTrack.Looped = false
+		specialTrack.Priority = Enum.AnimationPriority.Action4
+	end)
+end)
+
+tool.Unequipped:Connect(function()
+	for _, track in ipairs(comboTracks) do
+		pcall(function() track:Stop() track:Destroy() end)
+	end
+	comboTracks = {}
+	if specialTrack then
+		pcall(function() specialTrack:Stop() specialTrack:Destroy() end)
+		specialTrack = nil
+	end
+	isSpecialPlaying = false
+	isComboPlaying = false
+	debounceUntil = 0
+	restoreWalkSpeed()
+end)
