@@ -1,0 +1,44 @@
+local function crearDummyTocable(pos, nombre)
+	local dummy = Instance.new("Model")
+	dummy.Name = nombre or "Dummy"
+
+	-- HumanoidRootPart
+	local root = Instance.new("Part")
+	root.Name = "HumanoidRootPart"
+	root.Size = Vector3.new(2,2,1)
+	root.Position = pos or Vector3.new(0,3,0)
+	root.Anchored = false
+	root.CanCollide = true
+	root.CanTouch = true
+	root.Parent = dummy
+
+	-- Hitbox
+	local hitbox = Instance.new("Part")
+	hitbox.Name = "Hitbox"
+	hitbox.Size = Vector3.new(3,5,2)
+	hitbox.Position = root.Position + Vector3.new(0,2,0)
+	hitbox.Transparency = 0.7
+	hitbox.BrickColor = BrickColor.new("Bright red")
+	hitbox.Anchored = false
+	hitbox.CanCollide = false
+	hitbox.CanTouch = true
+	hitbox.Parent = dummy
+
+	-- Weld hitbox a root
+	local weld = Instance.new("WeldConstraint")
+	weld.Part0 = root
+	weld.Part1 = hitbox
+	weld.Parent = root
+
+	-- Humanoid
+	local humanoid = Instance.new("Humanoid")
+	humanoid.Parent = dummy
+
+	-- Set PrimaryPart y parentear
+	dummy.PrimaryPart = root
+	dummy:SetPrimaryPartCFrame(CFrame.new(pos or Vector3.new(0,3,0)))
+	dummy.Parent = workspace
+end
+
+-- Crea el Dummy en la posición (0, 3, 0)
+crearDummyTocable(Vector3.new(0,3,0), "DummyTocable")
