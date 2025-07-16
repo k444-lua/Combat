@@ -1,0 +1,26 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local PlayHitSound = ReplicatedStorage:WaitForChild("PlayHitSound")
+
+local GOLPE_SOUNDS = {
+	"rbxassetid://99522423818822",
+	"rbxassetid://82310130370027",
+}
+local SPECIAL_SOUNDS = {
+	"rbxassetid://85661744378638",
+	"rbxassetid://97241088688581",
+}
+
+PlayHitSound.OnClientEvent:Connect(function(tipoGolpe)
+	local character = game.Players.LocalPlayer.Character
+	if not character then return end
+	local head = character:FindFirstChild("Head") or character.PrimaryPart or character
+	local sounds = (tipoGolpe == "especial") and SPECIAL_SOUNDS or GOLPE_SOUNDS
+	for _, soundId in ipairs(sounds) do
+		local sound = Instance.new("Sound")
+		sound.SoundId = soundId
+		sound.Volume = 1
+		sound.Parent = head
+		sound:Play()
+		game:GetService("Debris"):AddItem(sound, 2)
+	end
+end)
