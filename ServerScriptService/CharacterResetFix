@@ -1,0 +1,37 @@
+local Players = game:GetService("Players")
+
+local function cleanGrabAndPhysics(char)
+	-- Limpia cualquier Motor6D residual de agarre
+	for _, grip in ipairs(char:GetDescendants()) do
+		if grip:IsA("Motor6D") and grip.Name == "GrabMotor" then
+			grip:Destroy()
+		end
+	end
+	-- Rehabilita Animate
+	local anim = char:FindFirstChild("Animate")
+	if anim then anim.Disabled = false end
+	-- Restablece físicas
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.PlatformStand = false
+		humanoid.WalkSpeed = 16
+		humanoid.JumpPower = 50
+		humanoid.AutoRotate = true
+	end
+	-- Restore network ownership
+	local player = Players:GetPlayerFromCharacter(char)
+	if player then
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then
+				pcall(function() part:SetNetworkOwner(player) end)
+			end
+		end
+	end
+end
+
+Players.PlayerAdded:Connect(function(player)
+	player.CharacterAdded:Connect(function(char)
+		task.wait(0.1)
+		cleanGrabAndPhysics(char)
+	end)
+end)
