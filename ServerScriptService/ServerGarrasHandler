@@ -1,0 +1,311 @@
+-- ServerGarrasHandler: Daño, resistencia, ragdoll, accesorios y VFX/Sonidos para CatPaws
+
+local ToolName = "CatPaws"
+local PAWS = {
+	{ accessoryName = "LeftPaw", hand = "LeftHand", gripAttachment = "LeftGripAttachment" },
+	{ accessoryName = "RightPaw", hand = "RightHand", gripAttachment = "RightGripAttachment" }
+}
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local AccessoriesFolder = ReplicatedStorage:WaitForChild("PawAccessories")
+local GolpeEvent = ReplicatedStorage:WaitForChild("GolpeEvent")
+local GolpeEspecialEvent = ReplicatedStorage:WaitForChild("GolpeEspecialEvent")
+local PlayHitSound = ReplicatedStorage:WaitForChild("PlayHitSound")
+local ragdollModule = require(game.ServerScriptService:WaitForChild("RagdollModule"))
+local hitboxManager = require(game.ServerScriptService:WaitForChild("RagdollHitboxManager"))
+local SafeDamage = require(game.ServerScriptService:WaitForChild("SafeDamage"))
+
+-- Carpeta de VFX
+local VFXFolder = ReplicatedStorage:WaitForChild("VFX")
+local VFX_NAME = "HitVFX" -- Cambia a tu modelo nuevo si quieres este efecto
+
+-- NUEVO: Event para emitir VFX en clientes
+local VFXEmit = ReplicatedStorage:WaitForChild("VFXEmit")
+
+local HITBOX_TEMP_SIZE = Vector3.new(2,6,3)
+local HITBOX_TEMP_DURATION = 0.2
+local COOLDOWN = 0.3
+
+local lastAttack = {}
+local specialDebounce = {}
+
+local function ponerEnRagdoll(character)
+	-- NO ragdoll por resistencia si está en finalizable (vida 0)
+	if character:GetAttribute("ForceRagdoll") then
+		print("[RAGDOLL] Bloqueado ragdoll por resistencia: está en modo finalizable.")
+		return
+	end
+
+	if character:GetAttribute("EnRagdoll") then print("[RAGDOLL] Ya está en ragdoll."); return end
+	character:SetAttribute("EnRagdoll", true)
+	ragdollModule.Ragdoll(character, true, 4)
+	hitboxManager.Create(character)
+	task.spawn(function()
+		wait(4)
+		-- NO quitar ragdoll si está en modo finalizable (vida 0)
+		if character and character.Parent and not character:GetAttribute("ForceRagdoll") then
+			hitboxManager.Remove(character)
+			ragdollModule.Ragdoll(character, false)
+			character:SetAttribute("EnRagdoll", false)
+			local stats = character:FindFirstChild("Stats")
+			if stats then
+				local resistencia = stats:FindFirstChild("Resistencia")
+				if resistencia and resistencia.Value == 0 then
+					resistencia.Value = 75
+					print("[RAGDOLL] Resistencia restaurada a 75")
+				end
+			end
+		end
+	end)
+end
+
+-- Instancia VFX, soporta Model y Part, y asegura que no empuje jugadores.
+-- Ahora hace que la EMISIÓN de partículas ocurra en los clientes via RemoteEvent
+local function instanciarVFX(targetCFrame)
+	print("[VFX] Instanciando VFX en posición:", targetCFrame)
+	local vfxTemplate = VFXFolder:FindFirstChild(VFX_NAME)
+	if not vfxTemplate then
+		warn("[VFX] No se encontró el VFX: " .. tostring(VFX_NAME))
+		return
+	end
+
+	local vfx
+	if vfxTemplate:IsA("Model") then
+		vfx = vfxTemplate:Clone()
+		vfx.Parent = workspace
+		print("[VFX] Modelo clonado y parentado.")
+
+		for _, part in ipairs(vfx:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Anchored = true
+				part.CanCollide = false
+			end
+		end
+
+		local meshPart = vfx:FindFirstChildWhichIsA("BasePart", true)
+		if meshPart then
+			meshPart.CFrame = targetCFrame
+		else
+			warn("[VFX] No se encontró MeshPart en el VFX")
+		end
+
+		game:GetService("Debris"):AddItem(vfx, 3)
+	elseif vfxTemplate:IsA("BasePart") then
+		vfx = vfxTemplate:Clone()
+		vfx.CFrame = targetCFrame
+		vfx.Anchored = true
+		vfx.CanCollide = false
+		vfx.Parent = workspace
+		print("[VFX] BasePart clonado y parentado.")
+
+		game:GetService("Debris"):AddItem(vfx, 3)
+	end
+
+	-- NUEVO: Envía el modelo a los clientes para que ellos hagan .Emit()
+	if vfx then
+		VFXEmit:FireAllClients(vfx)
+	end
+end
+
+local function limpiarAccesorios(character)
+	print("[PAWS] Limpiando accesorios del personaje:", character and character.Name)
+	for _, pawInfo in ipairs(PAWS) do
+		local acc = character:FindFirstChild(pawInfo.accessoryName)
+		if acc and acc:IsA("Accessory") then
+			acc:Destroy()
+			print("[PAWS] Accesorio destruido:", pawInfo.accessoryName)
+		end
+	end
+end
+
+-- Añade las paws al equipar la herramienta
+game.Players.PlayerAdded:Connect(function(player)
+	player.CharacterAdded:Connect(function(character)
+		print("[PAWS] Character añadido para el jugador:", player.Name)
+		character.ChildAdded:Connect(function(child)
+			if child:IsA("Tool") and child.Name == ToolName then
+				print("[PAWS] Tool equipada, añadiendo paws.")
+				limpiarAccesorios(character)
+				for _, pawInfo in ipairs(PAWS) do
+					local template = AccessoriesFolder:FindFirstChild(pawInfo.accessoryName)
+					if template then
+						local accClone = template:Clone()
+						local humanoid = character:FindFirstChildOfClass("Humanoid")
+						if humanoid then
+							humanoid:AddAccessory(accClone)
+							print("[PAWS] Accesorio añadido:", pawInfo.accessoryName)
+						else
+							warn("[PAWS] No se encontró Humanoid en el personaje al equipar las paws")
+						end
+					else
+						warn("[PAWS] No se encontró el accesorio: " .. pawInfo.accessoryName)
+					end
+				end
+				child.Unequipped:Connect(function()
+					print("[PAWS] Tool unequipped, limpiando paws.")
+					limpiarAccesorios(character)
+				end)
+			end
+		end)
+	end)
+end)
+
+GolpeEvent.OnServerEvent:Connect(function(player, rootCFrame)
+	print("[HITBOX] GolpeEvent recibido de:", player.Name)
+	local now = tick()
+	if lastAttack[player] and now - lastAttack[player] < COOLDOWN then
+		print("[HITBOX] Golpe en cooldown, ignorando.")
+		return
+	end
+	lastAttack[player] = now
+
+	local character = player.Character
+	if not character then print("[HITBOX] Character no encontrado."); return end
+	local humanoidRoot = character:FindFirstChild("HumanoidRootPart")
+	if not humanoidRoot then print("[HITBOX] HumanoidRootPart no encontrado."); return end
+
+	local tempHitbox = Instance.new("Part")
+	tempHitbox.Size = HITBOX_TEMP_SIZE
+	tempHitbox.CFrame = rootCFrame * CFrame.new(0,0,-HITBOX_TEMP_SIZE.Z/2 - 2)
+	tempHitbox.Transparency = 1
+	tempHitbox.Anchored = true
+	tempHitbox.CanCollide = false
+	tempHitbox.CanTouch = true
+	tempHitbox.CanQuery = true
+	tempHitbox.Name = "ServerAttackHitbox"
+	tempHitbox.Parent = workspace
+	print("[HITBOX] Hitbox temporal creada.")
+
+	local hitDone = false
+	tempHitbox.Touched:Connect(function(otherPart)
+		if hitDone then return end
+		if otherPart.Name == "Hitbox" and otherPart.Parent ~= character then
+			local victimChar = otherPart.Parent
+			local humanoid = victimChar:FindFirstChildOfClass("Humanoid")
+			if humanoid and humanoid.Health > 0 then
+				hitDone = true
+				SafeDamage:Deal(humanoid, 5)
+				print("[HITBOX] Daño aplicado a:", victimChar.Name)
+
+				local targetPart = victimChar:FindFirstChild("HumanoidRootPart") or victimChar:FindFirstChild("Head")
+				if targetPart then
+					instanciarVFX(targetPart.CFrame)
+				else
+					warn("[HITBOX] No se encontró parte objetivo para VFX en víctima:", victimChar.Name)
+				end
+
+				local stats = victimChar:FindFirstChild("Stats")
+				local resistencia = stats and stats:FindFirstChild("Resistencia")
+				if resistencia then
+					local amount = 25
+					resistencia.Value = math.max(0, resistencia.Value - amount)
+					print("[HITBOX] Resistencia reducida a:", resistencia.Value)
+					-- SOLO poner en ragdoll por resistencia si NO está en modo finalizable
+					if resistencia.Value == 0 and not victimChar:GetAttribute("EnRagdoll") and not victimChar:GetAttribute("ForceRagdoll") then
+						print("[HITBOX] Víctima a ragdoll por resistencia:", victimChar.Name)
+						ponerEnRagdoll(victimChar)
+					end
+				end
+				local victimPlayer = game.Players:GetPlayerFromCharacter(victimChar)
+				if victimPlayer then
+					PlayHitSound:FireClient(victimPlayer, "normal")
+				end
+				if player then
+					PlayHitSound:FireClient(player, "normal")
+				end
+				-- Solo dar recompensas si la víctima NO está en ragdoll por resistencia ni finalizable
+				if victimChar:GetAttribute("EnRagdoll") ~= true and not victimChar:GetAttribute("ForceRagdoll") then
+					local attChar = player.Character
+					if attChar and attChar:FindFirstChild("Stats") then
+						local attStats = attChar.Stats
+						local attResistencia = attStats:FindFirstChild("Resistencia")
+						if attResistencia then
+							attResistencia.Value = math.min(attResistencia.Value + 15, 100)
+							print("[HITBOX] Resistencia atacante aumentada a:", attResistencia.Value)
+						end
+						local attStamina = attStats:FindFirstChild("Stamina")
+						if attStamina then
+							attStamina.Value = math.min(attStamina.Value + 20, 100)
+							print("[HITBOX] Estamina atacante aumentada a:", attStamina.Value)
+						end
+					end
+				end
+			end
+		end
+	end)
+
+	game:GetService("Debris"):AddItem(tempHitbox, HITBOX_TEMP_DURATION)
+end)
+
+GolpeEspecialEvent.OnServerEvent:Connect(function(attacker, target, parteTocada)
+	print("[SPECIAL] GolpeEspecialEvent recibido de:", attacker.Name)
+	if not attacker or not target then return end
+	local attackerKey = attacker.UserId
+	local targetKey = target:GetDebugId()
+
+	if specialDebounce[attackerKey] or specialDebounce[targetKey] then
+		print("[SPECIAL] Debounce activo, ignorando.")
+		return
+	end
+	specialDebounce[attackerKey] = true
+	specialDebounce[targetKey] = true
+
+	if typeof(target) == "Instance" and target:IsA("Model") and target:FindFirstChild("Humanoid") then
+		local humanoid = target:FindFirstChild("Humanoid")
+		local canBeFinished = humanoid:GetAttribute("CanBeFinished")
+		local forceRagdoll = target:GetAttribute("ForceRagdoll")
+		local enRagdoll = target:GetAttribute("EnRagdoll")
+
+		-- Si está en estado finalizable (ForceRagdoll/canBeFinished): FINALIZA (muerte directa)
+		if forceRagdoll or canBeFinished then
+			print("[FINALIZADOR] Ejecutando finalización sobre:", target.Name)
+			humanoid:SetAttribute("CanBeFinished", false)
+			target:SetAttribute("ForceRagdoll", false)
+			-- DALE TIEMPO AL SISTEMA FINALIZABLE PARA LIBERAR EL CONTROL
+			task.wait(0.05)
+			humanoid.Health = 0
+			ragdollModule.Ragdoll(target, true)
+			local victimPlayer = game.Players:GetPlayerFromCharacter(target)
+			if victimPlayer then
+				PlayHitSound:FireClient(victimPlayer, "especial")
+			end
+			if attacker then
+				PlayHitSound:FireClient(attacker, "especial")
+			end
+			local attChar = attacker.Character
+			if attChar and attChar:FindFirstChild("Stats") then
+				local attStamina = attChar.Stats:FindFirstChild("Stamina")
+				if attStamina then
+					attStamina.Value = math.min(attStamina.Value + 10, 100)
+					print("[SPECIAL] Estamina atacante (especial) aumentada a:", attStamina.Value)
+				end
+			end
+		elseif enRagdoll then
+			-- Si solo está en ragdoll por resistencia, solo hace daño
+			SafeDamage:Deal(humanoid, 3)
+			print("[SPECIAL] Daño especial aplicado a:", target.Name)
+			local victimPlayer = game.Players:GetPlayerFromCharacter(target)
+			if victimPlayer then
+				PlayHitSound:FireClient(victimPlayer, "especial")
+			end
+			if attacker then
+				PlayHitSound:FireClient(attacker, "especial")
+			end
+			local attChar = attacker.Character
+			if attChar and attChar:FindFirstChild("Stats") then
+				local attStamina = attChar.Stats:FindFirstChild("Stamina")
+				if attStamina then
+					attStamina.Value = math.min(attStamina.Value + 10, 100)
+					print("[SPECIAL] Estamina atacante (especial) aumentada a:", attStamina.Value)
+				end
+			end
+		else
+			print("[SPECIAL] Golpe especial falló: la víctima no está en ragdoll ni finalizable")
+		end
+	end
+
+	task.delay(1, function()
+		specialDebounce[attackerKey] = nil
+		specialDebounce[targetKey] = nil
+	end)
+end)
