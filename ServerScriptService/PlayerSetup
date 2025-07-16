@@ -1,0 +1,96 @@
+local Players = game:GetService("Players")
+local ragdollModule = require(game.ServerScriptService:WaitForChild("RagdollModule"))
+
+local isResetting = {}
+local characterToPlayer = {}
+local alreadyRagdolled = {}
+
+Players.PlayerAdded:Connect(function(player)
+	isResetting[player] = false
+
+	player.CharacterRemoving:Connect(function(character)
+		isResetting[player] = true
+		characterToPlayer[character] = nil
+		task.delay(3, function()
+			isResetting[player] = false
+		end)
+	end)
+
+	player.CharacterAdded:Connect(function(character)
+		local humanoid = character:WaitForChild("Humanoid")
+		characterToPlayer[character] = player
+		alreadyRagdolled[character] = false
+
+		-- 📦 Crear carpeta Stats y sus valores
+		local stats = Instance.new("Folder")
+		stats.Name = "Stats"
+		stats.Parent = character
+		print("[PlayerSetup] Carpeta Stats creada en", player.Name)
+
+		local resistencia = Instance.new("NumberValue")
+		resistencia.Name = "Resistencia"
+		resistencia.Value = 100
+		resistencia.Parent = stats
+		print("[PlayerSetup] Resistencia creada y puesta en 100")
+
+		local stamina = Instance.new("NumberValue")
+		stamina.Name = "Stamina"
+		stamina.Value = 100
+		stamina.Parent = stats
+		print("[PlayerSetup] Stamina creada y puesta en 100")
+
+		-- GrabSkill: Estados de agarre
+		local canBeGrabbed = Instance.new("BoolValue")
+		canBeGrabbed.Name = "CanBeGrabbed"
+		canBeGrabbed.Value = true
+		canBeGrabbed.Parent = character
+
+		local isGrabbed = Instance.new("BoolValue")
+		isGrabbed.Name = "IsGrabbed"
+		isGrabbed.Value = false
+		isGrabbed.Parent = character
+
+		-- 🛡 Protección contra múltiples ejecuciones del evento Died
+		task.defer(function()
+			local diedExecuted = false
+			humanoid.Died:Connect(function()
+				if diedExecuted then return end
+				diedExecuted = true
+
+				local thisPlayer = characterToPlayer[character]
+				if not thisPlayer then
+					warn("[PlayerSetup] No se pudo identificar al jugador.")
+					return
+				end
+
+				print("Murió - isResetting:", isResetting[thisPlayer])
+
+				local stats = character:FindFirstChild("Stats")
+				if not stats then
+					warn("[PlayerSetup] Stats no encontrado. No aplicamos ragdoll.")
+					return
+				end
+
+				if alreadyRagdolled[character] then return end
+				alreadyRagdolled[character] = true
+
+				local stillValid = character:FindFirstChild("Head") and (character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso"))
+
+				if stillValid and not isResetting[thisPlayer] then
+					task.wait(0.6)
+					ragdollModule.Ragdoll(character, true)
+
+					task.delay(1, function()
+						if character and character.Parent then
+							ragdollModule.Ragdoll(character, false)
+						end
+					end)
+				end
+			end)
+		end)
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+	isResetting[player] = nil
+end)
