@@ -1,0 +1,138 @@
+local Module = {}
+local RE = game.ReplicatedStorage.Ragdoll
+local PS = game:GetService("PhysicsService")
+local RagdollHitboxManager = require(game.ServerScriptService.RagdollHitboxManager)
+
+local EXCLUDED_JOINTS = {LeftWrist=true, RightWrist=true, LeftAnkle=true, RightAnkle=true}
+Module.Check = function(name)
+	return not EXCLUDED_JOINTS[name]
+end
+
+Module.Joints = function(c)
+	local humanoid = c:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.RequiresNeck = false
+	end
+	for _,v in pairs(c:GetDescendants()) do
+		if v:IsA("Motor6D") and Module.Check(v.Name) then
+			if not v.Parent:FindFirstChild("Ragdoll_"..v.Name) then
+				local b = Instance.new("BallSocketConstraint")
+				b.Name = "Ragdoll_"..v.Name
+				local a0,a1 = Instance.new("Attachment"),Instance.new("Attachment")
+				a0.Parent,a1.Parent = v.Part0,v.Part1
+				b.Attachment0,b.Attachment1 = a0,a1
+				a0.CFrame,a1.CFrame = v.C0,v.C1
+				b.LimitsEnabled = true
+				b.TwistLimitsEnabled = true
+				b.Enabled = false
+				b.Parent = v.Parent
+			end
+		elseif v:IsA('BasePart') then
+			v.CollisionGroup = (v.Name == "HumanoidRootPart") and "B" or "A"
+			if v.Name == "Head" then
+				v.CanCollide = true
+			end
+		end
+	end
+end
+
+Module.Ragdoll = function(char, bool, duration)
+	if not char or not char:FindFirstChild("Humanoid") then return end
+
+	-- Permitir forzar ragdoll ignorando resistencia si es vida en 0/finalizable
+	local forceRagdoll = char:GetAttribute("ForceRagdoll")
+	local isForced = (forceRagdoll == true)
+
+	-- SOLO permitir ragdoll si resistencia es 0 o no existe (NPCs),
+	-- a menos que sea ragdoll forzado por vida 0 (finalizable)
+	local stats = char:FindFirstChild("Stats")
+	local resistencia = stats and stats:FindFirstChild("Resistencia")
+	if bool and not isForced and resistencia and resistencia.Value > 0 then
+		print("[RAGDOLL MODULE] Evitado ragdoll: resistencia > 0 ("..resistencia.Value..")")
+		return
+	end
+
+	local humanoid = char.Humanoid
+	local plr = game.Players:GetPlayerFromCharacter(char)
+
+	-- PROTECCIÓN: Eliminar Script o cualquier cosa llamada "Ragdoll" que NO sea BoolValue
+	local ragdollFlag = char:FindFirstChild("Ragdoll")
+	if ragdollFlag and not ragdollFlag:IsA("BoolValue") then
+		print("[RAGDOLL MODULE] Encontrado un Ragdoll que NO es BoolValue. Eliminando...")
+		ragdollFlag:Destroy()
+		ragdollFlag = nil
+	end
+	if not ragdollFlag then
+		ragdollFlag = Instance.new("BoolValue")
+		ragdollFlag.Name = "Ragdoll"
+		ragdollFlag.Parent = char
+		print("[RAGDOLL MODULE] BoolValue Ragdoll creado")
+	end
+	ragdollFlag.Value = bool
+
+	print("[RAGDOLL MODULE]", char.Name, "set ragdoll to", tostring(bool), "FORCED:", tostring(isForced))
+
+	if bool then
+		-- INICIO DEL RAGDOLL
+		if plr then
+			RE:FireClient(plr, true)
+		end
+		for _,v in pairs(char:GetDescendants()) do
+			if v:IsA("Motor6D") and Module.Check(v.Name) then
+				v.Enabled = false
+			elseif v:IsA("BallSocketConstraint") and v.Name:match("^Ragdoll_") then
+				v.Enabled = true
+			elseif v.Name == "Head" then
+				local b = Instance.new("BodyVelocity")
+				b.Velocity = Vector3.new(math.random(-10,10),0,math.random(-10,10))
+				b.MaxForce = Vector3.new(4000,4000,4000)
+				b.Parent = char.Head
+				task.spawn(function()
+					task.wait(0.1)
+					b:Destroy()
+				end)
+			end
+		end
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.GettingUp, false)
+		humanoid:ChangeState(Enum.HumanoidStateType.Ragdoll)
+		if char:FindFirstChild("Animate") then
+			char.Animate.Disabled = true
+		end
+
+		-- CREA LA RAGDOLL HITBOX ESPECIAL (finalizable o normal)
+		local ragdollDuration = duration or (isForced and 10 or 4) -- 10s si forzado/finalizable, 4s por defecto
+		RagdollHitboxManager.Create(char, ragdollDuration)
+
+		-- AUTOQUITAR hitbox y desragdoll tras duración, si se especifica
+		if ragdollDuration and ragdollDuration > 0 then
+			task.delay(ragdollDuration, function()
+				Module.Ragdoll(char, false)
+				RagdollHitboxManager.Remove(char)
+			end)
+		end
+	else
+		-- FIN DEL RAGDOLL
+		if plr then
+			RE:FireClient(plr, false)
+		end
+		for _,v in pairs(char:GetDescendants()) do
+			if v:IsA("Motor6D") then
+				v.Enabled = true
+			elseif v:IsA("BallSocketConstraint") and v.Name:match("^Ragdoll_") then
+				v.Enabled = false
+			end
+		end
+		if char:FindFirstChild("Animate") then
+			char.Animate.Disabled = false
+		end
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.GettingUp, true)
+		humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+		task.wait(0.2)
+		humanoid:ChangeState(Enum.HumanoidStateType.Running)
+
+		-- QUITA la RagdollHitbox si existe
+		RagdollHitboxManager.Remove(char)
+	end
+end
+
+return Module
