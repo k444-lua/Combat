@@ -1,0 +1,39 @@
+local RE = game:GetService("ReplicatedStorage"):WaitForChild("Ragdoll")
+local player = game.Players.LocalPlayer
+
+local function getCharacter()
+	return player.Character or player.CharacterAdded:Wait()
+end
+
+local function getHumanoid(char)
+	return char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid")
+end
+
+RE.OnClientEvent:Connect(function(isRagdoll)
+	local char = getCharacter()
+	local humanoid = getHumanoid(char)
+	if not humanoid or humanoid.Health <= 0 then return end
+
+	local animate = char:FindFirstChild("Animate")
+
+	if isRagdoll then
+		if workspace.CurrentCamera then
+			workspace.CurrentCamera.CameraSubject = char:FindFirstChild("Head") or humanoid
+		end
+		if animate then animate.Disabled = true end
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.GettingUp, false)
+		humanoid:ChangeState(Enum.HumanoidStateType.Ragdoll)
+		for _, track in ipairs(humanoid:GetPlayingAnimationTracks()) do
+			track:Stop(0)
+		end
+	else
+		if workspace.CurrentCamera then
+			workspace.CurrentCamera.CameraSubject = humanoid
+		end
+		if animate then animate.Disabled = false end
+		humanoid:SetStateEnabled(Enum.HumanoidStateType.GettingUp, true)
+		humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+		task.wait(0.2)
+		humanoid:ChangeState(Enum.HumanoidStateType.Running)
+	end
+end)
