@@ -1,0 +1,64 @@
+local ragdollModule = require(game.ServerScriptService.RagdollModule)
+local hitboxManager = require(game.ServerScriptService.RagdollHitboxManager) -- NUEVO
+
+local replicatedStorage = game:GetService("ReplicatedStorage")
+
+local function getPlayerCharacterAndPlayer(part)
+	local character = part.Parent
+	if character and character:FindFirstChild("Humanoid") then
+		local player = game.Players:GetPlayerFromCharacter(character)
+		return character, player
+	end
+end
+
+workspace.IncreaseResistencia.Touched:Connect(function(part)
+	local char, player = getPlayerCharacterAndPlayer(part)
+	if char and char:FindFirstChild("Stats") then
+		local resistencia = char.Stats:FindFirstChild("Resistencia")
+		if resistencia then
+			resistencia.Value = math.min(resistencia.Value + 10, 100)
+		end
+	end
+end)
+
+workspace.DecreaseResistencia.Touched:Connect(function(part)
+	local char, player = getPlayerCharacterAndPlayer(part)
+	if char and char:FindFirstChild("Stats") then
+		local resistencia = char.Stats:FindFirstChild("Resistencia")
+		if resistencia then
+			resistencia.Value = math.max(resistencia.Value - 10, 0)
+			if resistencia.Value == 0 then
+				ragdollModule.Ragdoll(char, true, 4)
+				hitboxManager.Create(char) -- NUEVO
+				task.spawn(function()
+					wait(4)
+					if char.Parent and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 then
+						resistencia.Value = 75
+						hitboxManager.Remove(char) -- NUEVO
+						ragdollModule.Ragdoll(char, false)
+					end
+				end)
+			end
+		end
+	end
+end)
+
+workspace.IncreaseStamina.Touched:Connect(function(part)
+	local char, player = getPlayerCharacterAndPlayer(part)
+	if char and char:FindFirstChild("Stats") then
+		local stamina = char.Stats:FindFirstChild("Stamina")
+		if stamina then
+			stamina.Value = math.min(stamina.Value + 10, 100)
+		end
+	end
+end)
+
+workspace.DecreaseStamina.Touched:Connect(function(part)
+	local char, player = getPlayerCharacterAndPlayer(part)
+	if char and char:FindFirstChild("Stats") then
+		local stamina = char.Stats:FindFirstChild("Stamina")
+		if stamina then
+			stamina.Value = math.max(stamina.Value - 10, 0)
+		end
+	end
+end)
