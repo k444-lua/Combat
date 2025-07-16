@@ -1,0 +1,675 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local SafeDamage = require(game.ServerScriptService.SafeDamage)
+local RagdollModule = require(game.ServerScriptService.RagdollModule)
+
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local GrabSkillRequest = remotes:WaitForChild("GrabSkillRequest")
+local GrabSkillPreAnim = remotes:WaitForChild("GrabSkillPreAnim")
+local GrabSkillStart = remotes:WaitForChild("GrabSkillStart")
+local GrabSkillEnd = remotes:WaitForChild("GrabSkillEnd")
+
+local GRAB_PRE_ANIM_DURATION = 0.6
+local GRAB_HITBOX_DURATION = 0.4
+local GRAB_DURATION = 4
+local GRAB_DAMAGE_PER_SECOND = 15
+local NORMAL_RAGDOLL_DURATION = 4  -- Duración normal del ragdoll
+local FATAL_RAGDOLL_DURATION = 10  -- Duración del ragdoll cuando la vida llega a 0
+
+-- Separación instantánea
+local function separateCharacters(attackerChar, victimChar)
+	local victimRoot = victimChar:FindFirstChild("HumanoidRootPart")
+	local attackerRoot = attackerChar:FindFirstChild("HumanoidRootPart")
+
+	if victimRoot and attackerRoot then
+		victimRoot.CFrame = attackerRoot.CFrame * CFrame.new(0, 0, -2.5)
+		victimRoot.Velocity = Vector3.new(0, 0, 0)
+		victimRoot.RotVelocity = Vector3.new(0, 0, 0)
+	end
+end
+
+-- Transferencia de propiedad instantánea
+local function transferOwnershipToAttacker(victimChar, attackerPlayer)
+	task.spawn(function()
+		local root = victimChar:FindFirstChild("HumanoidRootPart")
+		if root then root:SetNetworkOwner(attackerPlayer) end
+
+		for _, part in ipairs(victimChar:GetDescendants()) do
+			if part:IsA("BasePart") and part ~= root then
+				pcall(function() part:SetNetworkOwner(attackerPlayer) end)
+			end
+		end
+	end)
+end
+
+-- Restaurar propiedad original
+local function transferOwnershipToVictim(victimChar, victimPlayer)
+	for _, part in ipairs(victimChar:GetDescendants()) do
+		if part:IsA("BasePart") then
+			pcall(function() part:SetNetworkOwner(victimPlayer) end)
+		end
+	end
+end
+
+-- MEJORADO: Bloqueo preventivo de herramientas de la víctima - Se ejecuta antes del agarre
+local function preventVictimToolUse(victimChar)
+	if not victimChar then return end
+
+	-- Bloquear inmediatamente todas las herramientas existentes
+	for _, tool in ipairs(victimChar:GetChildren()) do
+		if tool:IsA("Tool") then
+			tool.Enabled = false
+			if tool:FindFirstChild("Handle") then
+				tool.Handle.CanTouch = false
+			end
+
+			-- Bloquear todos los scripts para evitar ese primer golpe
+			for _, script in pairs(tool:GetDescendants()) do
+				if script:IsA("LocalScript") or script:IsA("Script") then
+					script.Disabled = true
+				end
+			end
+		end
+	end
+
+	-- Desactivar animaciones inmediatamente
+	local anim = victimChar:FindFirstChild("Animate")
+	if anim then anim.Disabled = true end
+
+	-- Bloquear input del usuario inmediatamente
+	local victimPlayer = Players:GetPlayerFromCharacter(victimChar)
+	if victimPlayer and remotes:FindFirstChild("BlockPlayerInput") then
+		remotes.BlockPlayerInput:FireClient(victimPlayer, true)
+	end
+
+	-- Inmovilización parcial inmediata
+	local humanoid = victimChar:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.WalkSpeed = 0
+		humanoid.JumpPower = 0
+	end
+end
+
+-- Inmovilizar a la víctima - COMPLETO
+local function fullyImmobilizeVictim(victimChar)
+	local humanoid = victimChar:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	-- Guardar la vida inicial para referencia
+	local initialHealth = humanoid.Health
+
+	-- Crear un valor para rastrear cuando la vida llega a crítica - PÚBLICO para acceso fácil
+	local criticalHealth = Instance.new("BoolValue")
+	criticalHealth.Name = "GrabCriticalHealth"
+	criticalHealth.Value = false
+	criticalHealth.Parent = victimChar
+
+	-- PREVENIR CUALQUIER RAGDOLL DURANTE EL AGARRE
+	-- Guardar valor original para restaurarlo después
+	local originalForceRagdoll = victimChar:GetAttribute("ForceRagdoll")
+	victimChar:SetAttribute("ForceRagdoll", false)
+
+	-- Detector de vida crítica (1 o menos)
+	local healthConnection
+	healthConnection = humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+		-- Si la vida llega a 1 o menos, marcar para ragdoll fatal pero NO matar
+		if humanoid.Health <= 1 then
+			-- ESTO ES CRÍTICO: Guardar como variable pública en el personaje
+			criticalHealth.Value = true
+			-- Mantener con vida mínima durante el agarre
+			humanoid.Health = 1
+			print("LA VIDA HA LLEGADO A CRÍTICA - Se aplicará ragdoll de 10s al finalizar")
+		end
+	end)
+
+	-- Inmovilización completa
+	humanoid.PlatformStand = true
+	humanoid.WalkSpeed = 0
+	humanoid.JumpPower = 0
+	humanoid.AutoRotate = false
+
+	-- Desactivar animaciones (aunque ya se hizo en el bloqueo preventivo)
+	local anim = victimChar:FindFirstChild("Animate")
+	if anim then anim.Disabled = true end
+
+	-- Deshabilitar TODAS las herramientas (refuerzo del bloqueo preventivo)
+	local toolStates = {}
+	for _, tool in ipairs(victimChar:GetChildren()) do
+		if tool:IsA("Tool") then 
+			toolStates[tool] = {
+				Enabled = tool.Enabled,
+				CanTouch = tool:FindFirstChild("Handle") and tool.Handle.CanTouch or nil
+			}
+
+			tool.Enabled = false
+			if tool:FindFirstChild("Handle") then
+				tool.Handle.CanTouch = false
+			end
+
+			-- Bloquear scripts
+			for _, script in pairs(tool:GetDescendants()) do
+				if script:IsA("LocalScript") or script:IsA("Script") then
+					script.Disabled = true
+				end
+			end
+		end
+	end
+
+	-- Monitorear nuevas herramientas
+	local toolMonitor
+	toolMonitor = victimChar.ChildAdded:Connect(function(child)
+		if child:IsA("Tool") then
+			child.Enabled = false
+			if child:FindFirstChild("Handle") then
+				child.Handle.CanTouch = false
+			end
+
+			-- Bloquear scripts también
+			for _, script in pairs(child:GetDescendants()) do
+				if script:IsA("LocalScript") or script:IsA("Script") then
+					script.Disabled = true
+				end
+			end
+		end
+	end)
+
+	-- Bloquear input del usuario (refuerzo del bloqueo preventivo)
+	local victimPlayer = Players:GetPlayerFromCharacter(victimChar)
+	if victimPlayer and remotes:FindFirstChild("BlockPlayerInput") then
+		remotes.BlockPlayerInput:FireClient(victimPlayer, true)
+	end
+
+	-- Función para restaurar todo al final
+	return function()
+		-- Desconectar monitores
+		if healthConnection then healthConnection:Disconnect() end
+		if toolMonitor then toolMonitor:Disconnect() end
+
+		if humanoid and humanoid.Parent then
+			humanoid.PlatformStand = false
+			humanoid.WalkSpeed = 16
+			humanoid.JumpPower = 50
+			humanoid.AutoRotate = true
+
+			-- NUNCA matamos al jugador, solo lo dejamos con 1 de vida si llegó a crítico
+			if criticalHealth.Value then
+				humanoid.Health = 1 -- Mantenerlo con 1 de vida, no matarlo
+			end
+		end
+
+		if anim then anim.Disabled = false end
+
+		-- Restaurar herramientas
+		for tool, state in pairs(toolStates) do
+			if tool and tool.Parent then
+				tool.Enabled = state.Enabled
+				if tool:FindFirstChild("Handle") and state.CanTouch ~= nil then
+					tool.Handle.CanTouch = state.CanTouch
+				end
+
+				-- Reactivar scripts
+				for _, script in pairs(tool:GetDescendants()) do
+					if script:IsA("LocalScript") or script:IsA("Script") then
+						script.Disabled = false
+					end
+				end
+			end
+		end
+
+		-- Desbloquear input
+		if victimPlayer and remotes:FindFirstChild("BlockPlayerInput") then
+			remotes.BlockPlayerInput:FireClient(victimPlayer, false)
+		end
+
+		-- Restaurar atributo ForceRagdoll al finalizar
+		victimChar:SetAttribute("ForceRagdoll", originalForceRagdoll)
+
+		-- NO eliminar el valor crítico hasta después del ragdoll
+	end
+end
+
+-- COMPLETAMENTE REDISEÑADO: Sistema robusto para herramientas del atacante
+local function blockAttackerTools(attackerChar)
+	-- Guardar referencia al jugador
+	local attackerPlayer = Players:GetPlayerFromCharacter(attackerChar)
+	if not attackerPlayer then return end
+
+	-- Marcar al jugador como en estado de agarre
+	attackerPlayer:SetAttribute("IsGrabbing", true)
+
+	-- Almacenar el estado original de TODAS las herramientas
+	local toolStates = {}
+
+	-- Función para guardar y configurar herramienta
+	local function processExistingTool(tool)
+		if not tool:IsA("Tool") then return end
+
+		-- Guardar estado completo
+		toolStates[tool] = {
+			Enabled = tool.Enabled,
+			CanTouch = tool:FindFirstChild("Handle") and tool.Handle.CanTouch or nil,
+			Scripts = {}
+		}
+
+		-- Guardar estado de scripts
+		for _, script in pairs(tool:GetDescendants()) do
+			if script:IsA("LocalScript") or script:IsA("Script") then
+				toolStates[tool].Scripts[script] = script.Disabled
+			end
+		end
+
+		-- Configurar según tipo
+		local lowerName = tool.Name:lower()
+		if lowerName == "hoverboard" or lowerName == "hoverboardtool" then
+			tool.Enabled = true
+			if tool:FindFirstChild("Handle") then
+				tool.Handle.CanTouch = true
+			end
+		else
+			tool.Enabled = false
+			if tool:FindFirstChild("Handle") then
+				tool.Handle.CanTouch = false
+			end
+
+			-- Desactivar scripts para evitar cualquier activación
+			for _, script in pairs(tool:GetDescendants()) do
+				if script:IsA("LocalScript") or script:IsA("Script") then
+					script.Disabled = true
+				end
+			end
+		end
+	end
+
+	-- Procesar todas las herramientas existentes
+	for _, tool in ipairs(attackerChar:GetChildren()) do
+		processExistingTool(tool)
+	end
+
+	-- Monitorear nuevas herramientas
+	local toolMonitor = attackerChar.ChildAdded:Connect(function(child)
+		processExistingTool(child)
+	end)
+
+	-- Función robusta para restauración completa
+	local function restoreTools()
+		if not attackerChar or not attackerChar.Parent then return end
+
+		-- Remover marca de estado de agarre
+		if attackerPlayer then
+			attackerPlayer:SetAttribute("IsGrabbing", nil)
+		end
+
+		-- Desconectar monitor
+		if toolMonitor then toolMonitor:Disconnect() end
+
+		-- Restaurar todas las herramientas guardadas
+		for tool, state in pairs(toolStates) do
+			if tool and tool.Parent then
+				-- Restaurar estado principal
+				tool.Enabled = state.Enabled
+
+				-- Restaurar Handle
+				if tool:FindFirstChild("Handle") and state.CanTouch ~= nil then
+					tool.Handle.CanTouch = state.CanTouch
+				end
+
+				-- Restaurar scripts
+				for script, wasDisabled in pairs(state.Scripts) do
+					if script and script.Parent then
+						script.Disabled = wasDisabled
+					end
+				end
+			end
+		end
+
+		-- Enviar evento al cliente para forzar actualización de herramientas
+		if attackerPlayer and remotes:FindFirstChild("RefreshTools") then
+			remotes.RefreshTools:FireClient(attackerPlayer)
+		end
+
+		-- Limpiar tabla de estados
+		table.clear(toolStates)
+	end
+
+	-- Crear respaldo en caso de errores
+	local restoreBackup
+	restoreBackup = function()
+		pcall(restoreTools)
+		attackerPlayer:SetAttribute("IsGrabbing", nil)
+	end
+
+	-- Devolver función de restauración principal y respaldo
+	return restoreTools, restoreBackup
+end
+
+-- Agarre instantáneo sin delays
+local function grabAttach(attackerChar, victimChar)
+	local attackerPlayer = Players:GetPlayerFromCharacter(attackerChar)
+	local victimPlayer = Players:GetPlayerFromCharacter(victimChar)
+	local grip = attackerChar:FindFirstChild("RightHand") or attackerChar:FindFirstChild("Right Arm")
+	local victimRoot = victimChar:FindFirstChild("HumanoidRootPart")
+	if not grip or not victimRoot then return nil end
+
+	for _, m in ipairs(grip:GetChildren()) do
+		if m:IsA("Motor6D") and m.Name == "GrabMotor" then
+			m:Destroy()
+		end
+	end
+
+	separateCharacters(attackerChar, victimChar)
+	transferOwnershipToAttacker(victimChar, attackerPlayer)
+
+	local restoreVictim = fullyImmobilizeVictim(victimChar)
+
+	local attach = Instance.new("Motor6D")
+	attach.Name = "GrabMotor"
+	attach.Part0 = grip
+	attach.Part1 = victimRoot
+	attach.C0 = CFrame.new(0, 0, 0)
+	attach.C1 = CFrame.new(0, 0, 0)
+	attach.MaxVelocity = 0.05
+	attach.DesiredAngle = 0
+	attach.CurrentAngle = 0
+	attach.Parent = grip
+
+	local supportAttach = Instance.new("Motor6D")
+	supportAttach.Name = "GrabSupportMotor"
+	supportAttach.Part0 = attackerChar.HumanoidRootPart
+	supportAttach.Part1 = victimRoot
+	supportAttach.C0 = CFrame.new(0, 0, -2.5)
+	supportAttach.C1 = CFrame.new()
+	supportAttach.Parent = attackerChar.HumanoidRootPart
+
+	victimRoot.Anchored = true
+	task.delay(0.05, function() -- Pequeño delay para asegurar estabilidad
+		if victimRoot and victimRoot.Parent then
+			victimRoot.Anchored = false
+		end
+	end)
+
+	return function()
+		if attach and attach.Parent then attach:Destroy() end
+		if supportAttach and supportAttach.Parent then supportAttach:Destroy() end
+		if restoreVictim then restoreVictim() end
+
+		if victimPlayer then
+			transferOwnershipToVictim(victimChar, victimPlayer)
+		end
+	end
+end
+
+-- FUNCIÓN MEJORADA: Aplicar daño segundo a segundo y detectar vida crítica
+local function startGrabDamage(victimChar)
+	local humanoid = victimChar:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	local criticalHealthValue = victimChar:FindFirstChild("GrabCriticalHealth")
+
+	-- Mostrar mensaje de depuración al inicio
+	print("Iniciando daño de agarre. Vida inicial:", humanoid.Health)
+
+	for i = 1, GRAB_DURATION do
+		-- Esperar un segundo
+		task.wait(1)
+
+		-- Si el personaje ya no existe, salir
+		if not humanoid or not humanoid.Parent then break end
+
+		-- Aplicar daño directo - esto será visible
+		SafeDamage:Deal(humanoid, GRAB_DAMAGE_PER_SECOND)
+		print("Segundo", i, "- Aplicado daño:", GRAB_DAMAGE_PER_SECOND, "- Vida actual:", humanoid.Health)
+
+		-- IMPORTANTE: Si la vida llegó a 1 o menos, marcar como "crítico" para ragdoll fatal
+		if humanoid.Health <= 1 and criticalHealthValue then
+			criticalHealthValue.Value = true
+			humanoid.Health = 1 -- Mantener con vida mínima durante el agarre
+			print("¡VIDA CRÍTICA! Marcado para ragdoll fatal pero NO para muerte")
+		end
+	end
+
+	-- Mensaje de finalización
+	print("Daño de agarre finalizado. Vida final:", humanoid.Health)
+	print("Estado GrabCriticalHealth:", (criticalHealthValue and criticalHealthValue.Value))
+
+	-- Devolvemos un valor que indica si alcanzó vida crítica
+	return criticalHealthValue and criticalHealthValue.Value
+end
+
+-- NUEVO: Verificar si un jugador está siendo agarrado o está agarrando
+local function isPlayerInGrabState(player)
+	if not player then return false end
+
+	-- Verificar si está agarrando a alguien
+	if player:GetAttribute("IsGrabbing") then return true end
+
+	-- Verificar si está siendo agarrado
+	local character = player.Character
+	if not character then return false end
+
+	local isGrabbed = character:FindFirstChild("IsGrabbed")
+	return isGrabbed and isGrabbed.Value
+end
+
+-- Crear un remote para actualizar herramientas si no existe
+if not remotes:FindFirstChild("RefreshTools") then
+	local refreshTools = Instance.new("RemoteEvent")
+	refreshTools.Name = "RefreshTools"
+	refreshTools.Parent = remotes
+end
+
+-- Evento principal de agarre
+GrabSkillRequest.OnServerEvent:Connect(function(player)
+	-- No permitir si ya está en estado de agarre
+	if isPlayerInGrabState(player) then return end
+
+	local now = tick()
+	if player:GetAttribute("GrabCooldownUntil") and now < player:GetAttribute("GrabCooldownUntil") then
+		return
+	end
+
+	local character = player.Character
+	if not character then return end
+
+	local stats = character:FindFirstChild("Stats")
+	if not stats then return end
+	local stamina = stats:FindFirstChild("Stamina")
+	if not stamina then return end
+
+	local canBeGrabbed = character:FindFirstChild("CanBeGrabbed")
+	local isGrabbed = character:FindFirstChild("IsGrabbed")
+	if not canBeGrabbed or not isGrabbed then return end
+
+	if stamina.Value < 100 then return end
+	if isGrabbed.Value or not canBeGrabbed.Value then return end
+
+	GrabSkillPreAnim:FireClient(player)
+	player:SetAttribute("GrabCooldownUntil", now + GRAB_PRE_ANIM_DURATION)
+
+	task.delay(GRAB_PRE_ANIM_DURATION, function()
+		local root = character:FindFirstChild("HumanoidRootPart")
+		if not root then return end
+
+		local hitbox = Instance.new("Part")
+		hitbox.Anchored = true
+		hitbox.CanCollide = false
+		hitbox.Transparency = 1
+		hitbox.Size = Vector3.new(4, 6, 4)
+		hitbox.CFrame = root.CFrame * CFrame.new(0, 0, -3)
+		hitbox.Parent = workspace
+
+		local hitConnected = false
+		local hitConn
+		hitConn = hitbox.Touched:Connect(function(hit)
+			if hitConnected then return end
+			local victimChar = hit.Parent
+			local victimPlayer = Players:GetPlayerFromCharacter(victimChar)
+			if victimPlayer and victimPlayer ~= player then
+				local victimStats = victimChar:FindFirstChild("Stats")
+				local victimCanBeGrabbed = victimChar:FindFirstChild("CanBeGrabbed")
+				local victimIsGrabbed = victimChar:FindFirstChild("IsGrabbed")
+				if not victimStats or not victimCanBeGrabbed or not victimIsGrabbed then return end
+				if victimCanBeGrabbed.Value and not victimIsGrabbed.Value then
+					hitConnected = true
+					stamina.Value = 0
+					canBeGrabbed.Value = true
+					isGrabbed.Value = false
+					victimCanBeGrabbed.Value = false
+					victimIsGrabbed.Value = true
+
+					-- NUEVO: Bloqueo preventivo para evitar el primer golpe
+					preventVictimToolUse(victimChar)
+
+					-- SECUENCIA OPTIMIZADA CON SISTEMA DE RECUPERACIÓN:
+					local restoreTools, restoreToolsBackup = blockAttackerTools(character)
+					local restoreGrab = grabAttach(character, victimChar)
+
+					GrabSkillStart:FireClient(player, "attacker", victimPlayer)
+					GrabSkillStart:FireClient(victimPlayer, "victim", player)
+
+					local ended = false
+
+					-- Iniciar daño cada segundo y rastrear si alcanzó vida crítica
+					local reachedCritical = false
+					task.spawn(function()
+						reachedCritical = startGrabDamage(victimChar)
+					end)
+
+					-- NUEVA FUNCIÓN: Garantizar limpieza completa al finalizar
+					local function endGrabComplete(useNormalRagdoll)
+						if ended then return end -- Evitar doble ejecución
+						ended = true
+
+						-- Notificar a los clientes
+						GrabSkillEnd:FireClient(player, "attacker")
+						GrabSkillEnd:FireClient(victimPlayer, "victim")
+						victimCanBeGrabbed.Value = true
+						victimIsGrabbed.Value = false
+
+						-- Restaurar estados con captura de errores
+						pcall(function()
+							if restoreGrab then restoreGrab() end
+						end)
+
+						-- IMPORTANTE: Usar ambas funciones de restauración para garantizar que funcione
+						pcall(function()
+							if restoreTools then restoreTools() end
+						end)
+
+						-- Usar el backup si falla la restauración principal
+						pcall(function()
+							if restoreToolsBackup then restoreToolsBackup() end
+						end)
+
+						-- Verificar si la vida llegó a crítica durante el agarre
+						local criticalHealthValue = victimChar:FindFirstChild("GrabCriticalHealth")
+						local reachedCriticalHealth = criticalHealthValue and criticalHealthValue.Value
+
+						-- Elegir el ragdoll correcto sin matar al jugador
+						local ragdollDuration
+						if useNormalRagdoll then
+							ragdollDuration = NORMAL_RAGDOLL_DURATION
+							print("Aplicando ragdoll normal (4s) - Agarre interrumpido")
+						else if reachedCriticalHealth then
+								ragdollDuration = FATAL_RAGDOLL_DURATION
+								print("APLICANDO RAGDOLL FATAL (10s) - Vida llegó a crítica durante agarre")
+							else
+								ragdollDuration = NORMAL_RAGDOLL_DURATION
+								print("Aplicando ragdoll normal (4s) - Vida no llegó a crítica durante agarre")
+							end
+						end
+
+						-- AHORA ES SEGURO ACTIVAR EL RAGDOLL - El agarre ya terminó
+						victimChar:SetAttribute("ForceRagdoll", true)
+
+						-- Intentar crear joints y aplicar ragdoll con manejo de errores
+						pcall(function()
+							RagdollModule.Joints(victimChar)
+
+							-- Fuerza para ragdoll natural
+							local victimRoot = victimChar:FindFirstChild("HumanoidRootPart")
+							if victimRoot then
+								local force = Instance.new("BodyVelocity")
+								force.MaxForce = Vector3.new(4000, 4000, 4000)
+								force.Velocity = Vector3.new(math.random(-5, 5), 2, math.random(-5, 5))
+								force.Parent = victimRoot
+								game:GetService("Debris"):AddItem(force, 0.1)
+							end
+
+							-- Aplicar ragdoll con la duración correcta
+							RagdollModule.Ragdoll(victimChar, true, ragdollDuration)
+						end)
+
+						-- Limpiar después del ragdoll
+						task.delay(ragdollDuration + 0.5, function()
+							if victimChar and victimChar.Parent then
+								-- Restaurar el valor original
+								victimChar:SetAttribute("ForceRagdoll", nil)
+
+								-- Eliminar el valor crítico
+								local criticalValue = victimChar:FindFirstChild("GrabCriticalHealth")
+								if criticalValue then
+									criticalValue:Destroy()
+								end
+							end
+
+							-- Forzar actualización de herramientas para el atacante
+							if player and remotes:FindFirstChild("RefreshTools") then
+								remotes.RefreshTools:FireClient(player)
+							end
+						end)
+					end
+
+					-- Temporizador para finalizar el agarre después del tiempo completo
+					local grabTimer = task.delay(GRAB_DURATION, function()
+						endGrabComplete(false)
+					end)
+
+					-- Solo terminar anticipadamente si el atacante muere
+					local attackerHumanoid = character:FindFirstChildOfClass("Humanoid")
+					if attackerHumanoid then
+						local deathConn = attackerHumanoid.Died:Connect(function()
+							task.cancel(grabTimer)
+							endGrabComplete(true)
+							deathConn:Disconnect()
+						end)
+					end
+
+					if hitConn then hitConn:Disconnect() end
+					hitbox:Destroy()
+				end
+			end
+		end)
+
+		task.delay(GRAB_HITBOX_DURATION, function()
+			if not hitConnected then
+				if hitConn then hitConn:Disconnect() end
+				hitbox:Destroy()
+			end
+		end)
+	end)
+end)
+
+-- NUEVO: Cliente - Actualización forzada de herramientas
+if remotes:FindFirstChild("RefreshTools") then
+	remotes.RefreshTools.OnClientEvent:Connect(function()
+		local player = game:GetService("Players").LocalPlayer
+		if not player or not player.Character then return end
+
+		-- Ciclar por todas las herramientas para forzar actualización visual
+		for _, tool in ipairs(player.Character:GetChildren()) do
+			if tool:IsA("Tool") then
+				pcall(function()
+					-- Guardar estado actual
+					local wasEquipped = tool.Parent == player.Character
+
+					-- Desactivar y activar para refrescar
+					if wasEquipped then
+						tool.Parent = player.Backpack
+						task.wait(0.05)
+						tool.Parent = player.Character
+					end
+				end)
+			end
+		end
+	end)
+end
