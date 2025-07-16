@@ -1,0 +1,31 @@
+local M = require(game.ServerScriptService.RagdollModule)
+local P = game:GetService("PhysicsService")
+P:RegisterCollisionGroup("A")
+P:RegisterCollisionGroup("B")
+P:CollisionGroupSetCollidable("A","B",false)
+
+game.ReplicatedStorage.Ragdoll.OnServerEvent:Connect(function(plr,a)
+	local char = plr.Character or plr.CharacterAdded:Wait()
+	M.Ragdoll(char,a)
+end)
+
+local function Vel(v,p)
+	local a=90
+	if (v.X<=-a or v.X>=a or v.Y<=-a or v.Y>=a or v.Z<=-a or v.Z>=a)then --Velocity Checks
+		return true
+	end
+	return false
+end
+
+local db = false
+local RS = game:GetService("RunService")
+
+RS.Heartbeat:Connect(function()
+	for _,v in pairs(game.Players:GetPlayers())do
+		local c = v.Character or v.CharacterAdded:Wait()
+		local H = c:FindFirstChild("Humanoid")
+		if H and c:FindFirstChild("HumanoidRootPart") and H.Health~=0 and Vel(c.HumanoidRootPart.Velocity) and c:FindFirstChild("LowerTorso") and c.LowerTorso:FindFirstChild("Root") and c.LowerTorso.Root.Enabled==true then
+			M.Ragdoll(c,"")
+		end
+	end
+end)
