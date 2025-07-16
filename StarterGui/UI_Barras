@@ -1,0 +1,75 @@
+local player = game.Players.LocalPlayer
+local gui = player:WaitForChild("PlayerGui")
+local uiBarras = gui:WaitForChild("UI_Barras", 10)
+local resistencia = uiBarras:WaitForChild("Resistencia", 10)
+local stamina = uiBarras:WaitForChild("Stamina", 10)
+
+if resistencia and stamina then
+	local resistenciaBG = resistencia:WaitForChild("BG", 5)
+	local staminaBG = stamina:WaitForChild("BG", 5)
+	local resistenciaTop = resistenciaBG:WaitForChild("Top", 5)
+	local staminaTop = staminaBG:WaitForChild("Top", 5)
+	local BGWidth = resistenciaBG.Size.X.Scale
+	local BGHeight = resistenciaBG.Size.Y.Scale
+	local borderMargin = 0.05
+
+	resistenciaTop.Position = UDim2.new(0, 0, 0, 0)
+	staminaTop.Position = UDim2.new(0, 0, 0, 0)
+	resistenciaTop.Size = UDim2.new(BGWidth - borderMargin, 0, BGHeight - borderMargin, 0)
+	staminaTop.Size = UDim2.new(BGWidth - borderMargin, 0, BGHeight - borderMargin, 0)
+
+	local resistenciaText = resistenciaBG:WaitForChild("Amount", 5)
+	local staminaText = staminaBG:WaitForChild("Amount", 5)
+	resistenciaText.TextStrokeTransparency = 0
+	resistenciaText.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+	staminaText.TextStrokeTransparency = 0
+	staminaText.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+
+	local maxResistencia = 100
+	local maxStamina = 100
+
+	-- Funcion que actualiza las barras con valores reales
+	local function updateBars(currentResistencia, currentStamina)
+		resistenciaTop.Size = UDim2.new(math.clamp(currentResistencia / maxResistencia, 0, 1), 0, 1, 0)
+		resistenciaText.Text = tostring(currentResistencia) .. "/" .. tostring(maxResistencia)
+		staminaTop.Size = UDim2.new(math.clamp(currentStamina / maxStamina, 0, 1), 0, 1, 0)
+		staminaText.Text = tostring(currentStamina) .. "/" .. tostring(maxStamina)
+	end
+
+	local function connectStats()
+		local character = player.Character or player.CharacterAdded:Wait()
+		local stats = character:WaitForChild("Stats", 5)
+		if not stats then
+			warn("[UI_Barras] No se encontró la carpeta Stats en el character")
+			return
+		end
+
+		local resistenciaValue = stats:WaitForChild("Resistencia", 5)
+		local staminaValue = stats:WaitForChild("Stamina", 5)
+		if not resistenciaValue or not staminaValue then
+			warn("[UI_Barras] No se encontraron los valores Resistencia o Stamina en Stats")
+			return
+		end
+
+		-- Actualiza la UI la primera vez
+		updateBars(resistenciaValue.Value, staminaValue.Value)
+
+		-- Conecta eventos para actualizar la UI cuando cambien los valores
+		resistenciaValue:GetPropertyChangedSignal("Value"):Connect(function()
+			updateBars(resistenciaValue.Value, staminaValue.Value)
+		end)
+		staminaValue:GetPropertyChangedSignal("Value"):Connect(function()
+			updateBars(resistenciaValue.Value, staminaValue.Value)
+		end)
+
+		-- Por si acaso, actualiza al respawnear
+		player.CharacterAdded:Connect(function()
+			wait(0.2)
+			connectStats()
+		end)
+	end
+
+	connectStats()
+else
+	warn("No se pudieron encontrar las barras de Resistencia o Stamina en PlayerGui.")
+end
