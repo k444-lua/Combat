@@ -1,0 +1,114 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local remotes = ReplicatedStorage:WaitForChild("Remotes")
+local GrabSkillRequest = remotes:WaitForChild("GrabSkillRequest")
+local GrabSkillPreAnim = remotes:WaitForChild("GrabSkillPreAnim")
+local GrabSkillStart = remotes:WaitForChild("GrabSkillStart")
+local GrabSkillEnd = remotes:WaitForChild("GrabSkillEnd")
+
+local player = Players.LocalPlayer
+
+local function getChar()
+	return player.Character or player.CharacterAdded:Wait()
+end
+
+local grabActive = false
+local grabRole = nil
+local grabAnimTrack
+
+local ALLOWED_TOOL = "Hoverboard"
+
+-- Bloqueo de tools
+local function blockTools()
+	local char = getChar()
+	for _, tool in ipairs(char:GetChildren()) do
+		if tool:IsA("Tool") then
+			if grabActive then
+				if grabRole == "attacker" then
+					tool.Enabled = (tool.Name == ALLOWED_TOOL)
+				else
+					tool.Enabled = false
+				end
+			else
+				tool.Enabled = true
+			end
+		end
+	end
+end
+
+local function updateBlockStates()
+	blockTools()
+end
+
+UIS.InputBegan:Connect(function(input, gpe)
+	if gpe then return end
+	if input.KeyCode == Enum.KeyCode.F and not grabActive then
+		local char = getChar()
+		local stats = char:FindFirstChild("Stats")
+		local stamina = stats and stats:FindFirstChild("Stamina")
+		local canBeGrabbed = char:FindFirstChild("CanBeGrabbed")
+		local isGrabbed = char:FindFirstChild("IsGrabbed")
+		if stamina and canBeGrabbed and isGrabbed then
+			if stamina.Value == 100 and canBeGrabbed.Value and not isGrabbed.Value then
+				GrabSkillRequest:FireServer()
+			end
+		end
+	end
+end)
+
+GrabSkillPreAnim.OnClientEvent:Connect(function()
+	local char = getChar()
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		local anim = Instance.new("Animation")
+		anim.AnimationId = "rbxassetid://132034061811475"
+		local track = humanoid:LoadAnimation(anim)
+		track:Play()
+		game:GetService("Debris"):AddItem(anim, 2)
+	end
+end)
+
+GrabSkillStart.OnClientEvent:Connect(function(role, otherPlayer)
+	grabActive = true
+	grabRole = (role == "attacker" or role == "victim") and role or nil
+	updateBlockStates()
+	local char = getChar()
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		local anim = Instance.new("Animation")
+		if role == "attacker" then
+			anim.AnimationId = "rbxassetid://85810380202173"
+		elseif role == "victim" then
+			anim.AnimationId = "rbxassetid://127156925178747"
+		end
+		local track = humanoid:LoadAnimation(anim)
+		track:Play()
+		grabAnimTrack = track
+		game:GetService("Debris"):AddItem(anim, 5)
+	end
+end)
+
+GrabSkillEnd.OnClientEvent:Connect(function()
+	grabActive = false
+	grabRole = nil
+	updateBlockStates()
+	if grabAnimTrack then
+		grabAnimTrack:Stop()
+		grabAnimTrack = nil
+	end
+end)
+
+RunService.RenderStepped:Connect(function()
+	if grabActive and grabRole == "victim" then
+		local char = getChar()
+		local humanoid = char:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			humanoid.WalkSpeed = 0
+			humanoid.JumpPower = 0
+			humanoid.PlatformStand = true
+		end
+	end
+end)
