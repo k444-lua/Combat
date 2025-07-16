@@ -1,0 +1,76 @@
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local remote = ReplicatedStorage:WaitForChild("AOERemote")
+local RagdollModule = require(game.ServerScriptService.RagdollModule)
+local SafeDamage = require(game.ServerScriptService.SafeDamage)
+
+-- NUEVO: RemoteEvent sonido global
+local FinalizerSound = ReplicatedStorage:WaitForChild("FinalizerSound")
+
+remote.OnServerEvent:Connect(function(player, data)
+	if data.action == "SpecialFinisher" and data.victimName and typeof(data.victimName) == "string" then
+		local victimChar = workspace:FindFirstChild(data.victimName)
+		if not victimChar then
+			warn("[AOERemoteHandler] Character no encontrado:", data.victimName)
+			return
+		end
+
+		local humanoid = victimChar:FindFirstChildOfClass("Humanoid")
+		if not humanoid then
+			warn("[AOERemoteHandler] El objetivo no tiene humanoid")
+			return
+		end
+
+		-- Estado FINALIZABLE: muerte instantánea con efecto y ragdoll permanente
+		if humanoid:GetAttribute("CanBeFinished") then
+			print("[AOERemoteHandler] Ejecutando FINALIZADOR sobre:", victimChar.Name)
+			humanoid:SetAttribute("CanBeFinished", false)
+			victimChar:SetAttribute("ForceRagdoll", false)
+
+			-- SONIDO GLOBAL FINALIZADOR
+			FinalizerSound:FireAllClients(victimChar:GetPivot())
+
+			task.wait(0.1)
+			SafeDamage:DealDirect(humanoid, 999) -- Mata aunque estuviera en modo finalizable
+			task.wait(0.05)
+			if humanoid.Health > 0 then
+				print("[AOERemoteHandler] Forzando muerte manual")
+				humanoid.Health = -100
+			end
+
+			RagdollModule.Ragdoll(victimChar, true)
+			if victimChar:FindFirstChild("Animate") then
+				victimChar.Animate.Disabled = true
+			end
+			victimChar:BreakJoints()
+
+			local cf = victimChar:FindFirstChild("HumanoidRootPart") and victimChar.HumanoidRootPart.CFrame or victimChar:GetPivot()
+			for _, plr in ipairs(Players:GetPlayers()) do
+				remote:FireClient(plr, {
+					action = "FinisherEffect",
+					cframe = cf,
+					mod = 1
+				})
+			end
+
+			task.delay(3, function()
+				local victimPlayer = Players:GetPlayerFromCharacter(victimChar)
+				if victimChar and victimChar.Parent then
+					victimChar:Destroy()
+				end
+				if victimPlayer then
+					victimPlayer:LoadCharacter()
+				end
+			end)
+			return
+		end
+
+		-- NUEVO: Si el objetivo está en ragdoll corto (no finalizable), aún así ejecuta el sonido de finisher
+		if victimChar:GetAttribute("EnRagdoll") then
+			FinalizerSound:FireAllClients(victimChar:GetPivot())
+			-- No se altera ninguna lógica, solo se agrega el sonido en el caso de ragdoll corto
+		end
+
+		warn("[AOERemoteHandler] Intento de finisher fallido. Estado no válido para:", victimChar.Name)
+	end
+end)
