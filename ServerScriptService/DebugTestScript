@@ -1,0 +1,7 @@
+print(">> ServerScriptService scripts están corriendo <<")
+game.Players.PlayerAdded:Connect(function(plr)
+	print("PlayerAdded:", plr.Name)
+	plr.CharacterAdded:Connect(function(char)
+		print("CharacterAdded:", char.Name)
+	end)
+end)
