@@ -1,0 +1,37 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local FinalizerSound = ReplicatedStorage:WaitForChild("FinalizerSound")
+local DeathSound = ReplicatedStorage:WaitForChild("DeathSound")
+
+-- Cambia estos IDs por los de tus sonidos
+local FINALIZER_SOUND_ID = "rbxassetid://81487150369113"
+local DEATH_SOUND_ID = "rbxassetid://111997600022754"
+
+local function playSound(soundId, pos)
+	local sound = Instance.new("Sound")
+	sound.SoundId = soundId
+	sound.Volume = 1
+	sound.Looped = false
+	if typeof(pos) == "CFrame" then
+		local part = Instance.new("Part")
+		part.Anchored = true
+		part.CanCollide = false
+		part.Transparency = 1
+		part.Size = Vector3.new(2,2,2)
+		part.CFrame = pos
+		part.Parent = workspace
+		sound.Parent = part
+		game:GetService("Debris"):AddItem(part, 6)
+	else
+		sound.Parent = workspace
+	end
+	sound:Play()
+	game:GetService("Debris"):AddItem(sound, 6)
+end
+
+FinalizerSound.OnClientEvent:Connect(function(pos)
+	playSound(FINALIZER_SOUND_ID, pos)
+end)
+
+DeathSound.OnClientEvent:Connect(function(pos)
+	playSound(DEATH_SOUND_ID, pos)
+end)
