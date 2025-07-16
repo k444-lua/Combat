@@ -1,0 +1,23 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local player = game.Players.LocalPlayer
+
+local GrabSkillForce = ReplicatedStorage:WaitForChild("GrabSkillForce")
+
+GrabSkillForce.OnClientEvent:Connect(function(state, cframe)
+	local char = player.Character
+	if not char then return end
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	if state == "grabbed" then
+		humanoid.PlatformStand = true
+		if cframe then
+			local root = char:FindFirstChild("HumanoidRootPart")
+			if root then
+				root.CFrame = cframe
+			end
+		end
+	elseif state == "released" then
+		humanoid.PlatformStand = false
+	end
+end)
