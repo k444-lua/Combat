@@ -1,0 +1,40 @@
+-- Script (Server) bajo MyTool
+
+local tool      = script.Parent
+local RS        = game:GetService("ReplicatedStorage")
+local templates = RS:WaitForChild("AccessoryTemplates")
+local templateA = templates:WaitForChild("MyHat")  -- el Accessory en RS
+local currentClone
+
+local function cleanupClone()
+	if currentClone and currentClone.Parent then
+		currentClone:Destroy()
+	end
+	currentClone = nil
+end
+
+tool.Equipped:Connect(function()
+	local character = tool.Parent
+	if not character or not character:FindFirstChild("Humanoid") then return end
+
+	-- **Si ya lo tiene, no clonamos otra vez**  
+	if character:FindFirstChild("MyHat") then
+		return
+	end
+
+	cleanupClone()
+	currentClone = templateA:Clone()
+	currentClone.Parent = character
+	print("🔍 Clone creado en:", currentClone:GetFullName())
+end)
+
+tool.Unequipped:Connect(function()
+	cleanupClone()
+	print("🔍 Clone destruido")
+end)
+
+tool.Parent:GetPropertyChangedSignal("Parent"):Connect(function()
+	if not tool.Parent:FindFirstChild("Humanoid") then
+		cleanupClone()
+	end
+end)
