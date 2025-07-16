@@ -1,0 +1,78 @@
+local Players = game:GetService("Players")
+local RagdollModule = require(game.ServerScriptService.RagdollModule)
+local FINALIZABLE_TIME = 10
+
+local function enterFinalizable(humanoid, char)
+	if not humanoid or not char then return end
+	if humanoid:GetAttribute("CanBeFinished") then return end
+
+	humanoid:SetAttribute("CanBeFinished", true)
+	char:SetAttribute("ForceRagdoll", true)
+
+	-- Reinicia el ragdoll (extiende a 10s desde ahora aunque ya esté ragdoll)
+	RagdollModule.Ragdoll(char, true, FINALIZABLE_TIME)
+
+	humanoid.Health = 1
+	if char:FindFirstChild("Animate") then
+		char.Animate.Disabled = true
+	end
+
+	task.delay(FINALIZABLE_TIME, function()
+		if humanoid:GetAttribute("CanBeFinished") then
+			humanoid:SetAttribute("CanBeFinished", false)
+			char:SetAttribute("ForceRagdoll", false)
+			RagdollModule.Ragdoll(char, false)
+			if char:FindFirstChild("Animate") then
+				char.Animate.Disabled = false
+			end
+			-- Restaurar resistencia a 75 si estaba en 0
+			local stats = char:FindFirstChild("Stats")
+			if stats then
+				local resistencia = stats:FindFirstChild("Resistencia")
+				if resistencia and resistencia.Value == 0 then
+					resistencia.Value = 75
+				end
+			end
+		end
+	end)
+
+	print("[SafeDamage] Entró en FINALIZABLE (desde SafeDamage):", char.Name)
+end
+
+local SafeDamage = {}
+
+function SafeDamage:Deal(humanoid, dmg)
+	if not humanoid or not humanoid:IsA("Humanoid") then return end
+	local char = humanoid.Parent
+
+	-- Si ya está en finalizable, nunca bajar la vida de 1
+	if humanoid:GetAttribute("CanBeFinished") then
+		if humanoid.Health > 1 then
+			humanoid.Health = math.max(1, humanoid.Health - dmg)
+		end
+		return
+	end
+
+	-- Si NO está en finalizable, nunca dejar que la vida baje de 1, y si llega a 1, activar finalizable (extiende ragdoll si ya está)
+	if humanoid.Health > 1 then
+		if humanoid.Health - dmg < 1 then
+			enterFinalizable(humanoid, char)
+			return
+		else
+			humanoid:TakeDamage(dmg)
+			if humanoid.Health <= 1 then
+				enterFinalizable(humanoid, char)
+			end
+			return
+		end
+	elseif humanoid.Health <= 1 then
+		enterFinalizable(humanoid, char)
+		return
+	end
+end
+
+function SafeDamage:DealDirect(humanoid, dmg)
+	humanoid:TakeDamage(dmg)
+end
+
+return SafeDamage
