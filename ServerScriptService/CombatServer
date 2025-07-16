@@ -1,0 +1,105 @@
+local ragdollModule = require(game.ServerScriptService.RagdollModule)
+local hitboxManager = require(game.ServerScriptService.RagdollHitboxManager)
+local SafeDamage = require(game.ServerScriptService.SafeDamage)
+
+local damagePorGolpe = 5
+local damagePorGolpeEspecial = 3
+
+local function ponerEnRagdoll(character)
+	if character:GetAttribute("ForceRagdoll") then return end
+	if character:GetAttribute("EnRagdoll") then return end
+	character:SetAttribute("EnRagdoll", true)
+	ragdollModule.Ragdoll(character, true, 4)
+	hitboxManager.Create(character)
+	task.spawn(function()
+		wait(4)
+		if character and character.Parent and not character:GetAttribute("ForceRagdoll") then
+			hitboxManager.Remove(character)
+			ragdollModule.Ragdoll(character, false)
+			character:SetAttribute("EnRagdoll", false)
+			local stats = character:FindFirstChild("Stats")
+			if stats then
+				local resistencia = stats:FindFirstChild("Resistencia")
+				if resistencia and resistencia.Value == 0 then
+					resistencia.Value = 75
+				end
+			end
+		end
+	end)
+end
+
+local function manejarGolpeEspecial(attacker, targetCharacter, parteTocada)
+	local stats = targetCharacter:FindFirstChild("Stats")
+	if stats then
+		local humanoid = targetCharacter:FindFirstChild("Humanoid")
+		if humanoid and humanoid.Health > 0 then
+			local enRagdoll = targetCharacter:GetAttribute("EnRagdoll")
+			local forceRagdoll = targetCharacter:GetAttribute("ForceRagdoll")
+			if enRagdoll or forceRagdoll then
+				SafeDamage:Deal(humanoid, damagePorGolpeEspecial)
+				print("[CombatServer] Golpe especial aplicado a:", targetCharacter.Name, "en parte:", parteTocada)
+				local attChar = attacker.Character
+				if attChar and attChar:FindFirstChild("Stats") then
+					local attStamina = attChar.Stats:FindFirstChild("Stamina")
+					if attStamina then
+						attStamina.Value = math.min(attStamina.Value + 10, 100)
+					end
+				end
+			else
+				print("[CombatServer] Golpe especial falló: la víctima no está en ragdoll")
+			end
+		end
+	end
+end
+
+local function onHit(attacker, targetCharacter)
+	print("[SERVER/onHit] Ejecutando onHit para", targetCharacter.Name)
+	local stats = targetCharacter:FindFirstChild("Stats")
+	print("  Stats:", stats)
+	if stats then
+		local resistencia = stats:FindFirstChild("Resistencia")
+		print("  Resistencia:", resistencia and resistencia.Value or "nil")
+		if resistencia then
+			resistencia.Value = math.max(0, resistencia.Value - 25)
+			print("  Nueva resistencia:", resistencia.Value)
+			if resistencia.Value == 0 and not targetCharacter:GetAttribute("EnRagdoll") and not targetCharacter:GetAttribute("ForceRagdoll") then
+				print("  Poniendo en ragdoll por resistencia")
+				ponerEnRagdoll(targetCharacter)
+			end
+		end
+
+		local humanoid = targetCharacter:FindFirstChild("Humanoid")
+		print("  Humanoid:", humanoid and humanoid.Health or "nil")
+		if humanoid then
+			SafeDamage:Deal(humanoid, damagePorGolpe)
+			print("  Nueva vida:", humanoid.Health)
+		end
+	end
+
+	if attacker and attacker:IsA("Player") and not targetCharacter:GetAttribute("EnRagdoll") and not targetCharacter:GetAttribute("ForceRagdoll") then
+		local attChar = attacker.Character
+		if attChar and attChar:FindFirstChild("Stats") then
+			local attStats = attChar.Stats
+			local attResistencia = attStats:FindFirstChild("Resistencia")
+			if attResistencia then
+				attResistencia.Value = math.min(attResistencia.Value + 15, 100)
+			end
+			local attStamina = attStats:FindFirstChild("Stamina")
+			if attStamina then
+				attStamina.Value = math.min(attStamina.Value + 20, 100)
+			end
+		end
+	end
+end
+
+game.ReplicatedStorage.GolpeEvent.OnServerEvent:Connect(function(attacker, target)
+	if typeof(target) == "Instance" and target:IsA("Model") and target:FindFirstChild("Humanoid") then
+		onHit(attacker, target)
+	end
+end)
+
+game.ReplicatedStorage.GolpeEspecialEvent.OnServerEvent:Connect(function(attacker, target, parteTocada)
+	if typeof(target) == "Instance" and target:IsA("Model") and target:FindFirstChild("Humanoid") then
+		manejarGolpeEspecial(attacker, target, parteTocada)
+	end
+end)
