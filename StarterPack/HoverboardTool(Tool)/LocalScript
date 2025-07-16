@@ -1,0 +1,318 @@
+-- LocalScript bajo tu HoverboardTool
+
+local tool       = script.Parent
+local Players    = game:GetService("Players")
+local RS         = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UIS        = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local char   = player.Character or player.CharacterAdded:Wait()
+
+-- ◼ CONFIG ◼
+local BOARD_TEMPLATE   = RS:WaitForChild("Board")
+local ACCESSORY_NAME   = "MyHat"      -- tu Accessory ya es clonado por el Script de servidor
+local WING_SOUND_NAME  = "FlapSound"  -- debe vivir en MyHat.Handle
+local RIDE_ANIM_ID     = "rbxassetid://119896733559331"
+local FOOT_VFX_TEMPLATE = RS:WaitForChild("FootVFXTemplate") -- Attachment con los 6 ParticleEmitter
+
+local baseHoverHeight = 0
+local flySpeed        = 35
+local boostDuration   = 0.7
+local boostRise       = 20
+
+-- ◼ STATE ◼
+local isMounted, isBoosting = false, false
+local board, weld, flightConn, rideTrack
+local hoverHeight = baseHoverHeight
+
+-- ◼ UTILITIES ◼
+local function getFeetToHRP(humanoid, hrp)
+	return humanoid.HipHeight + (hrp.Size.Y / 2)
+end
+
+local function getMaxGroundY(part)
+	local half = part.Size / 2430973735
+	local pts = {
+		part.Position,
+		part.Position + Vector3.new( half.X, 0,  half.Z),
+		part.Position + Vector3.new(-half.X, 0,  half.Z),
+		part.Position + Vector3.new( half.X, 0, -half.Z),
+		part.Position + Vector3.new(-half.X, 0, -half.Z),
+	}
+	local maxY = -math.huge
+	for _,p in ipairs(pts) do
+		local r = workspace:Raycast(p, Vector3.new(0, -100, 0))
+		local y = r and r.Position.Y or (p.Y - 100)
+		if y > maxY then maxY = y end
+	end
+	return maxY
+end
+
+-- ◼ WING SOUND ◼
+local function playWingSound()
+	local acc = char:FindFirstChild(ACCESSORY_NAME)
+	if not acc then print("playWingSound: No accessory") return end
+	local handle = acc:FindFirstChild("Handle")
+	if handle then
+		local flap = handle:FindFirstChild(WING_SOUND_NAME)
+		if flap and flap:IsA("Sound") then
+			flap.Looped      = true
+			flap.RollOffMode = Enum.RollOffMode.Linear
+			flap.MaxDistance = 100
+			flap.Volume      = 1
+			flap:Play()
+		end
+	else
+		print("playWingSound: No Handle in accessory")
+	end
+end
+
+local function stopWingSound()
+	local acc = char:FindFirstChild(ACCESSORY_NAME)
+	if not acc then print("stopWingSound: No accessory") return end
+	local handle = acc:FindFirstChild("Handle")
+	if handle then
+		local flap = handle:FindFirstChild(WING_SOUND_NAME)
+		if flap and flap:IsA("Sound") then
+			flap:Stop()
+		end
+	else
+		print("stopWingSound: No Handle in accessory")
+	end
+end
+
+-- ◼ VFX CONTROL - GENERAL (aplica para wings y pies) ◼
+local function enableVFXInAttachment(attachment)
+	for _, vfx in ipairs(attachment:GetChildren()) do
+		if vfx:IsA("ParticleEmitter") then
+			vfx.Enabled = true
+			-- Emite suficientes partículas para que el efecto aparezca completo al instante
+			local lifetime = vfx.Lifetime.Max
+			local rate = vfx.Rate
+			local toEmit = math.ceil(lifetime * rate)
+			vfx:Emit(toEmit)
+		end
+	end
+end
+
+local function disableVFXInAttachment(attachment)
+	for _, vfx in ipairs(attachment:GetChildren()) do
+		if vfx:IsA("ParticleEmitter") then
+			vfx.Enabled = false
+		end
+	end
+end
+
+-- ◼ VFX CONTROL - WINGS ◼
+local function enableWingVFX()
+	local acc = char:FindFirstChild(ACCESSORY_NAME)
+	if acc then
+		local handle = acc:FindFirstChild("Handle")
+		if handle then
+			for _, att in ipairs(handle:GetChildren()) do
+				if att:IsA("Attachment") then
+					enableVFXInAttachment(att)
+				end
+			end
+		end
+	end
+end
+
+local function disableWingVFX()
+	local acc = char:FindFirstChild(ACCESSORY_NAME)
+	if acc then
+		local handle = acc:FindFirstChild("Handle")
+		if handle then
+			for _, att in ipairs(handle:GetChildren()) do
+				if att:IsA("Attachment") then
+					disableVFXInAttachment(att)
+				end
+			end
+		end
+	end
+end
+
+-- ◼ FOOT VFX CONTROL (usando plantilla de Attachment) ◼
+
+-- Clona el Attachment con los 6 emitters a cada pie (si no existe)
+local function setupFootVFX()
+	for _, partName in ipairs({"LeftFoot", "RightFoot"}) do
+		local foot = char:FindFirstChild(partName)
+		if foot then
+			if not foot:FindFirstChild("FootVFXAttachment") then
+				local vfxAttach = FOOT_VFX_TEMPLATE:Clone()
+				vfxAttach.Name = "FootVFXAttachment"
+				vfxAttach.Parent = foot
+			end
+		end
+	end
+end
+
+local function enableFootVFX()
+	for _, partName in ipairs({"LeftFoot", "RightFoot"}) do
+		local foot = char:FindFirstChild(partName)
+		if foot then
+			local attach = foot:FindFirstChild("FootVFXAttachment")
+			if attach then
+				enableVFXInAttachment(attach)
+			end
+		end
+	end
+end
+
+local function disableFootVFX()
+	for _, partName in ipairs({"LeftFoot", "RightFoot"}) do
+		local foot = char:FindFirstChild(partName)
+		if foot then
+			local attach = foot:FindFirstChild("FootVFXAttachment")
+			if attach then
+				disableVFXInAttachment(attach)
+			end
+		end
+	end
+end
+
+-- ◼ FLIGHT LOOP ◼
+local function startFlight()
+	if flightConn then return end
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	local hrp      = char:WaitForChild("HumanoidRootPart")
+	local feet     = getFeetToHRP(humanoid, hrp)
+
+	flightConn = RunService.Heartbeat:Connect(function()
+		if not board or not board.Parent then return end
+
+		local groundY    = getMaxGroundY(board)
+		local targetTopY = groundY + hoverHeight + feet
+		local centerY    = targetTopY - (board.Size.Y / 2)
+		local heightDiff = centerY - board.Position.Y
+		local ascendF    = 5
+		local descendF   = 2
+		local factor     = (heightDiff > 0) and ascendF or descendF
+		local vy         = heightDiff * factor
+
+		local dir = humanoid.MoveDirection
+		board.Velocity = Vector3.new(dir.X * flySpeed, vy, dir.Z * flySpeed)
+	end)
+end
+
+local function stopFlight()
+	if flightConn then
+		flightConn:Disconnect()
+		flightConn = nil
+	end
+end
+
+-- ◼ MOUNT ◼
+local function mount()
+	if isMounted then return end
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+
+	-- Clonar y ubicar tabla
+	board = BOARD_TEMPLATE:Clone()
+	board.CanCollide = false
+	board.Anchored   = false
+	board.Parent     = workspace
+
+	local hrp  = char:WaitForChild("HumanoidRootPart")
+	local feet = getFeetToHRP(humanoid, hrp)
+	local boardTopY     = hrp.Position.Y - (hrp.Size.Y / 2) - baseHoverHeight
+	local ajuste        = 0.2
+	local newHRP_Y      = boardTopY + (board.Size.Y / 2) + feet - ajuste
+	local boardCenterY  = boardTopY + (board.Size.Y / 2)
+
+	-- posicionar HRP justo arriba de la tabla
+	hrp.CFrame   = CFrame.new(hrp.Position.X, newHRP_Y, hrp.Position.Z)
+		* CFrame.Angles(0, math.rad(hrp.Orientation.Y), 0)
+	-- posicionar tabla
+	board.CFrame = CFrame.new(hrp.Position.X, boardCenterY, hrp.Position.Z)
+		* CFrame.Angles(0, math.rad(hrp.Orientation.Y), 0)
+
+	weld = Instance.new("WeldConstraint", board)
+	weld.Part0 = board
+	weld.Part1 = hrp
+
+	playWingSound()
+	startFlight()
+
+	if humanoid then
+		local animator = humanoid:FindFirstChildOfClass("Animator")
+			or Instance.new("Animator", humanoid)
+		local animObj = Instance.new("Animation")
+		animObj.AnimationId = RIDE_ANIM_ID
+		rideTrack = animator:LoadAnimation(animObj)
+		rideTrack.Priority = Enum.AnimationPriority.Action
+		rideTrack.Looped   = true
+		rideTrack:Play()
+	end
+
+	hoverHeight = baseHoverHeight
+	isMounted   = true
+	enableWingVFX()
+	setupFootVFX()
+	enableFootVFX()
+end
+
+-- ◼ UNMOUNT ◼
+local function unmount()
+	if not isMounted then return end
+
+	disableWingVFX()
+	disableFootVFX()
+	stopFlight()
+	if weld  then weld:Destroy() end
+	if board then board:Destroy() end
+	if rideTrack then rideTrack:Stop() end
+
+	if char:FindFirstChild("Animate") then
+		char.Animate.Disabled = false
+	end
+
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		local state = humanoid:GetState()
+		if state == Enum.HumanoidStateType.Freefall then
+			humanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+		end
+	end
+
+	stopWingSound()
+	hoverHeight  = baseHoverHeight
+	isMounted    = false
+end
+
+-- ◼ BOOST ◼
+local function boost()
+	if not isMounted or isBoosting then return end
+	isBoosting = true
+
+	local bottom = board.Position - Vector3.new(0, board.Size.Y / 2, 0)
+	local ray    = workspace:Raycast(bottom, Vector3.new(0, -5, 0))
+	local dist   = ray and (bottom - ray.Position).Magnitude or 100
+	local rise   = (dist > 3) and 40 or boostRise
+
+	local elapsed = 0
+	while elapsed < boostDuration do
+		local dt = RunService.Heartbeat:Wait()
+		elapsed = elapsed + dt
+		hoverHeight = baseHoverHeight + rise * math.sin(math.pi * (elapsed / boostDuration))
+	end
+
+	hoverHeight = baseHoverHeight
+	isBoosting  = false
+end
+
+-- ◼ INPUT BINDINGS ◼
+tool.Activated:Connect(function()
+	if not isMounted then mount() else unmount() end
+end)
+
+UIS.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.Space then
+		boost()
+	end
+end)
+
+tool.Unequipped:Connect(unmount)
