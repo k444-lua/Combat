@@ -1,0 +1,19 @@
+-- LocalScript dentro de StarterGui
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local updateBarsEvent = ReplicatedStorage:WaitForChild("UpdateBars")
+
+updateBarsEvent.OnClientEvent:Connect(function(barType, action)
+	if barType == "Resistencia" then
+		if action == "Increase" then
+			-- Lógica para aumentar Resistencia
+		elseif action == "Decrease" then
+			-- Lógica para disminuir Resistencia
+		end
+	elseif barType == "Stamina" then
+		if action == "Increase" then
+			-- Lógica para aumentar Stamina
+		elseif action == "Decrease" then
+			-- Lógica para disminuir Stamina
+		end
+	end
+end)
