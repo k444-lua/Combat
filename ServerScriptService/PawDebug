@@ -1,0 +1,21 @@
+for _, pawName in ipairs({"LeftPaw", "RightPaw"}) do
+	local function watchPaw(paw)
+		if not paw then return end
+		paw:GetPropertyChangedSignal("Parent"):Connect(function()
+			print("[DEBUG] "..paw.Name.." parent cambiado a:", paw.Parent and paw.Parent:GetFullName() or "nil", debug.traceback())
+		end)
+	end
+
+	-- Escucha patas existentes en workspace
+	local oldPaw = workspace:FindFirstChild(pawName)
+	if oldPaw then
+		watchPaw(oldPaw)
+	end
+
+	-- Escucha nuevas patas creadas en workspace
+	workspace.ChildAdded:Connect(function(child)
+		if child.Name == pawName then
+			watchPaw(child)
+		end
+	end)
+end
