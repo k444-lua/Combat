@@ -1,0 +1,68 @@
+local Players = game:GetService("Players")
+local RagdollModule = require(game.ServerScriptService.RagdollModule)
+
+-- NUEVO: RemoteEvent sonido global de muerte
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local DeathSound = ReplicatedStorage:WaitForChild("DeathSound")
+
+local function setupCharacter(char)
+	local humanoid = char:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return end
+
+	humanoid.BreakJointsOnDeath = false
+
+	local finalizableActive = false
+
+	local function exitFinalizable()
+		if not finalizableActive then return end
+		finalizableActive = false
+		humanoid:SetAttribute("CanBeFinished", false)
+		char:SetAttribute("ForceRagdoll", false)
+		RagdollModule.Ragdoll(char, false)
+		if char:FindFirstChild("Animate") then
+			char.Animate.Disabled = false
+		end
+		print("[FinalizableHealthHandler] Salió de finalizable:", char.Name, "Health:", humanoid.Health)
+	end
+
+	-- La entrada al estado finalizable ahora la maneja SafeDamage, no aquí
+
+	humanoid:GetAttributeChangedSignal("CanBeFinished"):Connect(function()
+		if finalizableActive and not humanoid:GetAttribute("CanBeFinished") then
+			exitFinalizable()
+		end
+	end)
+
+	char:GetAttributeChangedSignal("ForceRagdoll"):Connect(function()
+		if finalizableActive and not char:GetAttribute("ForceRagdoll") then
+			exitFinalizable()
+		end
+	end)
+
+	humanoid.HealthChanged:Connect(function(health)
+		print("[FinalizableHealthHandler] HealthChanged:", health, "CanBeFinished:", humanoid:GetAttribute("CanBeFinished"), "en", char.Name)
+		-- Ya no se entra en finalizable aquí, solo debug y manejo de salida
+		if humanoid:GetAttribute("CanBeFinished") and not finalizableActive then
+			finalizableActive = true
+			print("[FinalizableHealthHandler] (Sync) Entró en FINALIZABLE:", char.Name, "Health:", humanoid.Health)
+		end
+	end)
+
+	humanoid.Died:Connect(function()
+		print("[FinalizableHealthHandler] El humanoid murió realmente:", char.Name)
+		-- SONIDO GLOBAL MUERTE
+		DeathSound:FireAllClients(char:GetPivot())
+	end)
+
+	char.AncestryChanged:Connect(function(_, parent)
+		if not parent then
+			finalizableActive = false
+			char:SetAttribute("ForceRagdoll", false)
+			print("[FinalizableHealthHandler] Character eliminado del workspace:", char.Name)
+		end
+	end)
+end
+
+Players.PlayerAdded:Connect(function(plr)
+	plr.CharacterAdded:Connect(setupCharacter)
+end)
