@@ -1,0 +1,60 @@
+-- GrabDummyHeadModule.lua
+-- Dummy visual de cabeza para agarre, sin bugs, sin CFrame, Motor6D puro
+
+local GrabDummyHead = {}
+
+function GrabDummyHead.Start(attackerChar, victimChar, animId)
+	local grip = attackerChar:FindFirstChild("RightHand") or attackerChar:FindFirstChild("Right Arm")
+	local victimHead = victimChar:FindFirstChild("Head")
+	if not grip or not victimHead then return function() end end
+
+	-- Clona la cabeza y accesorios
+	local dummyHead = victimHead:Clone()
+	for _, acc in ipairs(victimChar:GetChildren()) do
+		if acc:IsA("Accessory") then
+			local clone = acc:Clone()
+			clone.Parent = dummyHead
+		end
+	end
+	dummyHead.Parent = workspace
+	dummyHead.CFrame = grip.CFrame
+
+	-- Motor6D visual
+	local motor = Instance.new("Motor6D")
+	motor.Part0 = grip
+	motor.Part1 = dummyHead
+	motor.C0 = CFrame.new()
+	motor.C1 = CFrame.new()
+	motor.Parent = grip
+
+	-- Oculta cabeza real
+	victimHead.Transparency = 1
+	for _, d in ipairs(victimHead:GetChildren()) do
+		if d:IsA("Decal") then d.Transparency = 1 end
+	end
+
+	-- Anima el cuerpo real (NO modificar PlatformStand ni WalkSpeed)
+	local humanoid = victimChar:FindFirstChildOfClass("Humanoid")
+	local animTrack
+	if humanoid and animId then
+		local anim = Instance.new("Animation")
+		anim.AnimationId = animId
+		animTrack = humanoid:LoadAnimation(anim)
+		animTrack:Play()
+	end
+
+	return function()
+		-- Restaura cabeza real
+		victimHead.Transparency = 0
+		for _, d in ipairs(victimHead:GetChildren()) do
+			if d:IsA("Decal") then d.Transparency = 0 end
+		end
+		-- Detiene animación si la hubo
+		if animTrack then animTrack:Stop(); animTrack:Destroy() end
+		-- Limpia dummy y motor
+		if dummyHead and dummyHead.Parent then dummyHead:Destroy() end
+		if motor and motor.Parent then motor:Destroy() end
+	end
+end
+
+return GrabDummyHead
